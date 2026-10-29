@@ -65,6 +65,7 @@ class MainActivity : Activity(), GattClient.Listener {
         setContentView(ScrollView(this).apply { addView(root) })
 
         status = TextView(this).apply { textSize = 18f; text = "Відключено" }
+        title = "ControlDex v0.2"
         info = TextView(this)
         root.addView(status)
         root.addView(info)
