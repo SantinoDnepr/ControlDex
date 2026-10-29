@@ -2,7 +2,13 @@ package ua.controldex
 
 import android.annotation.SuppressLint
 import android.bluetooth.*
+import android.bluetooth.le.ScanCallback
+import android.bluetooth.le.ScanFilter
+import android.bluetooth.le.ScanResult
+import android.bluetooth.le.ScanSettings
 import android.content.Context
+import android.content.pm.PackageManager
+import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import java.util.UUID
@@ -27,17 +33,76 @@ class GattClient(private val ctx: Context, private val listener: Listener) {
     var connected = false
         private set
 
+    private var target: BluetoothDevice? = null
+    private var attempt = 0
+    private var initDone = false
+    private var scanCb: ScanCallback? = null
+    private val scanTimeout = Runnable { stopScan(); log("Не знайдено в BLE-ефірі за 8 с; пробую підключитись напряму"); doConnect() }
+
     fun connect(device: BluetoothDevice) {
         userDisconnect = false
-        listener.onState("Підключення до ${device.name}…")
-        gatt = device.connectGatt(ctx, false, cb, BluetoothDevice.TRANSPORT_LE)
+        target = device
+        attempt = 0
+        initDone = false
+        log("Android ${Build.VERSION.SDK_INT}, ${Build.MANUFACTURER} ${Build.MODEL}")
+        log("Пристрій ${device.name} ${device.address}, type=${device.type} (1 classic, 2 LE, 3 dual), bond=${device.bondState}")
+        if (Build.VERSION.SDK_INT >= 31 && ctx.checkSelfPermission(android.Manifest.permission.BLUETOOTH_SCAN) == PackageManager.PERMISSION_GRANTED) scan(device)
+        else doConnect()
     }
+
+    private fun scan(device: BluetoothDevice) {
+        val scanner = (ctx.getSystemService(Context.BLUETOOTH_SERVICE) as BluetoothManager).adapter.bluetoothLeScanner
+        if (scanner == null) { log("BLE-сканер недоступний"); doConnect(); return }
+        listener.onState("Пошук COM-DEX в ефірі (BLE)…")
+        val cb = object : ScanCallback() {
+            override fun onScanResult(type: Int, r: ScanResult) {
+                ui.post {
+                    if (scanCb == null) return@post
+                    log("Скан: знайдено ${r.device.address} rssi=${r.rssi} uuids=${r.scanRecord?.serviceUuids} raw=${r.scanRecord?.bytes?.take(31)?.joinToString("") { "%02X".format(it) }}")
+                    stopScan(); doConnect()
+                }
+            }
+            override fun onScanFailed(code: Int) { ui.post { log("Скан не вдався, код $code"); stopScan(); doConnect() } }
+        }
+        scanCb = cb
+        try {
+            scanner.startScan(
+                listOf(ScanFilter.Builder().setDeviceAddress(device.address).build()),
+                ScanSettings.Builder().setScanMode(ScanSettings.SCAN_MODE_LOW_LATENCY).build(), cb)
+            ui.postDelayed(scanTimeout, 8000)
+        } catch (e: Exception) { log("Скан: ${e.message}"); scanCb = null; doConnect() }
+    }
+
+    private fun stopScan() {
+        ui.removeCallbacks(scanTimeout)
+        val cb = scanCb ?: return
+        scanCb = null
+        try { (ctx.getSystemService(Context.BLUETOOTH_SERVICE) as BluetoothManager).adapter.bluetoothLeScanner?.stopScan(cb) } catch (_: Exception) {}
+    }
+
+    private fun doConnect() {
+        val d = target ?: return
+        attempt++
+        gatt?.close(); gatt = null
+        listener.onState("Підключення до ${d.name}, спроба $attempt…")
+        log("connectGatt(LE), спроба $attempt")
+        gatt = d.connectGatt(ctx, false, cb, BluetoothDevice.TRANSPORT_LE)
+    }
+
+    private fun statusName(s: Int) = when (s) {
+        0 -> "OK"; 8 -> "TIMEOUT"; 19 -> "PEER_TERMINATED"; 22 -> "LOCAL_TERMINATED"
+        62 -> "FAILED_TO_ESTABLISH"; 133 -> "GATT_ERROR"; 257 -> "GATT_FAILURE"; else -> "?"
+    }
+
+    private fun log(s: String) = ui.post { listener.onLog(s) }
 
     /** Лише GATT-від'єднання; пара та A2DP/HFP не чіпаються. */
     fun disconnect() {
         userDisconnect = true
+        stopScan()
         queue.clear(); busy = false
         gatt?.disconnect()
+        if (!connected) { gatt?.close(); gatt = null; listener.onState("Відключено") }
     }
 
     private fun find(svc: UUID, chr: UUID) = gatt?.getService(svc)?.getCharacteristic(chr)
@@ -79,20 +144,27 @@ class GattClient(private val ctx: Context, private val listener: Listener) {
         read(ComDex.DEVINFO_SVC, ComDex.SERIAL)
         read(ComDex.DEVINFO_SVC, ComDex.FW_REV)
         read(ComDex.BATTERY_SVC, ComDex.BATTERY_LVL)
-        enqueue { ui.post { listener.onReady() }; false }
+        enqueue { initDone = true; ui.post { listener.onReady() }; false }
     }
 
     private val cb = object : BluetoothGattCallback() {
         override fun onConnectionStateChange(g: BluetoothGatt, status: Int, newState: Int) {
+            log("onConnectionStateChange status=$status (${statusName(status)}) newState=$newState")
             if (newState == BluetoothProfile.STATE_CONNECTED && status == 0) {
                 connected = true
                 ui.post { listener.onState("З'єднано, пошук сервісів…") }
                 ui.postDelayed({ g.discoverServices() }, 1000)
             } else {
                 connected = false
-                g.close(); gatt = null; queue.clear(); busy = false
+                g.close(); if (gatt === g) gatt = null
+                queue.clear(); busy = false
                 ui.post {
-                    listener.onState(if (userDisconnect) "Відключено" else "З'єднання втрачено (код $status)")
+                    if (!userDisconnect && !initDone && attempt < 5) {
+                        log("Невдача, повтор через 2 с")
+                        ui.postDelayed({ if (!userDisconnect) doConnect() }, 2000)
+                    } else {
+                        listener.onState(if (userDisconnect) "Відключено" else "З'єднання втрачено (код $status ${statusName(status)})")
+                    }
                 }
             }
         }

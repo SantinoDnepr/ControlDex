@@ -6,6 +6,8 @@ import android.app.Activity
 import android.app.AlertDialog
 import android.bluetooth.BluetoothDevice
 import android.bluetooth.BluetoothManager
+import android.content.ClipData
+import android.content.ClipboardManager
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.media.AudioManager
@@ -20,6 +22,9 @@ import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.Switch
 import android.widget.TextView
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 import java.util.UUID
 
 @SuppressLint("MissingPermission", "SetTextI18n")
@@ -29,6 +34,10 @@ class MainActivity : Activity(), GattClient.Listener {
     private lateinit var status: TextView
     private lateinit var info: TextView
     private lateinit var logView: TextView
+    private lateinit var batteryView: BatteryView
+    private lateinit var batteryText: TextView
+    private val logLines = ArrayDeque<String>()
+    private val timeFmt = SimpleDateFormat("HH:mm:ss.SSS", Locale.US)
     private lateinit var boostSwitch: Switch
     private val controls = mutableListOf<View>()
     private val ui = Handler(Looper.getMainLooper())
@@ -64,6 +73,13 @@ class MainActivity : Activity(), GattClient.Listener {
         row.addView(btn("Підключитися") { connect() }, lp())
         row.addView(btn("Відключитися") { gatt.disconnect() }, lp())
         root.addView(row)
+
+        val bat = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = android.view.Gravity.CENTER_VERTICAL; setPadding(0, 16, 0, 0) }
+        batteryView = BatteryView(this)
+        batteryText = TextView(this).apply { textSize = 18f; text = "  Батарея COM-DEX: —"; }
+        bat.addView(batteryView)
+        bat.addView(batteryText)
+        root.addView(bat)
 
         root.addView(label("Гучність"))
         val vol = LinearLayout(this)
@@ -102,6 +118,10 @@ class MainActivity : Activity(), GattClient.Listener {
         controls += boostSwitch
         root.addView(boostSwitch)
 
+        root.addView(btn("Копіювати журнал") {
+            (getSystemService(CLIPBOARD_SERVICE) as ClipboardManager).setPrimaryClip(ClipData.newPlainText("log", logLines.reversed().joinToString("
+")))
+        })
         root.addView(label("Журнал"))
         logView = TextView(this).apply { textSize = 11f }
         root.addView(logView)
@@ -110,11 +130,10 @@ class MainActivity : Activity(), GattClient.Listener {
 
     // ---------- підключення ----------
     private fun connect() {
-        if (Build.VERSION.SDK_INT >= 31 &&
-            checkSelfPermission(Manifest.permission.BLUETOOTH_CONNECT) != PackageManager.PERMISSION_GRANTED
-        ) {
-            requestPermissions(arrayOf(Manifest.permission.BLUETOOTH_CONNECT), 1)
-            return
+        if (Build.VERSION.SDK_INT >= 31) {
+            val need = listOf(Manifest.permission.BLUETOOTH_CONNECT, Manifest.permission.BLUETOOTH_SCAN)
+                .filter { checkSelfPermission(it) != PackageManager.PERMISSION_GRANTED }
+            if (need.isNotEmpty()) { requestPermissions(need.toTypedArray(), 1); return }
         }
         val adapter = (getSystemService(BLUETOOTH_SERVICE) as BluetoothManager).adapter
         if (adapter == null || !adapter.isEnabled) {
@@ -140,7 +159,7 @@ class MainActivity : Activity(), GattClient.Listener {
     }
 
     override fun onRequestPermissionsResult(code: Int, p: Array<out String>, r: IntArray) {
-        if (r.firstOrNull() == PackageManager.PERMISSION_GRANTED) connect() else status.text = "Потрібен дозвіл Bluetooth"
+        if (r.isNotEmpty() && r.all { it == PackageManager.PERMISSION_GRANTED }) connect() else status.text = "Потрібен дозвіл Bluetooth"
     }
 
     // ---------- команди ----------
@@ -211,6 +230,9 @@ class MainActivity : Activity(), GattClient.Listener {
             "Батарея COM-DEX: ${if (battery >= 0) "$battery %" else "?"}${if (charging == 1) " (заряджається)" else ""}\n" +
             "Neck loop: ${if (neckloop == 1) "закрито (увімкнено)" else "відкрито (вимкнено)"}\n" +
             "Прошивка: $fw   Серійний №: $serial"
+        batteryView.level = battery
+        batteryView.charging = charging == 1
+        batteryText.text = "  Батарея COM-DEX: ${if (battery >= 0) "$battery %" else "—"}${if (charging == 1) " (заряджається)" else ""}"
         // як в оригіналі: при зарядці або відкритому neck loop — лише статус
         setControlsEnabled(ready && charging == 0 && neckloop == 1)
         if (fw != "?") boostSwitch.visibility = if (fwAtLeast(fw, "1.2.51")) View.VISIBLE else View.GONE
@@ -230,7 +252,10 @@ class MainActivity : Activity(), GattClient.Listener {
     private fun btn(t: String, a: () -> Unit) = Button(this).apply { text = t; setOnClickListener { a() } }
     private fun ctl(t: String, a: () -> Unit) = btn(t, a).also { controls += it }
     private fun log(s: String) {
-        logView.text = (s + "\n" + logView.text).take(2000)
+        logLines.addLast("${timeFmt.format(Date())} $s")
+        while (logLines.size > 150) logLines.removeFirst()
+        logView.text = logLines.reversed().joinToString("
+")
     }
 
     override fun onDestroy() {
