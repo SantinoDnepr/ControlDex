@@ -119,8 +119,7 @@ class MainActivity : Activity(), GattClient.Listener {
         root.addView(boostSwitch)
 
         root.addView(btn("Копіювати журнал") {
-            (getSystemService(CLIPBOARD_SERVICE) as ClipboardManager).setPrimaryClip(ClipData.newPlainText("log", logLines.reversed().joinToString("
-")))
+            (getSystemService(CLIPBOARD_SERVICE) as ClipboardManager).setPrimaryClip(ClipData.newPlainText("log", logLines.reversed().joinToString("\n")))
         })
         root.addView(label("Журнал"))
         logView = TextView(this).apply { textSize = 11f }
@@ -254,8 +253,7 @@ class MainActivity : Activity(), GattClient.Listener {
     private fun log(s: String) {
         logLines.addLast("${timeFmt.format(Date())} $s")
         while (logLines.size > 150) logLines.removeFirst()
-        logView.text = logLines.reversed().joinToString("
-")
+        logView.text = logLines.reversed().joinToString("\n")
     }
 
     override fun onDestroy() {
