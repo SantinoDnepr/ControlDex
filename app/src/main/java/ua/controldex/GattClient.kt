@@ -45,6 +45,7 @@ class GattClient(private val ctx: Context, private val listener: Listener) {
     private var initDone = false
     private var scanCb: ScanCallback? = null
     private var headset: BluetoothHeadset? = null
+    private var a2dp: BluetoothA2dp? = null
     private val stageTimers = mutableListOf<Runnable>()
     private val seen = HashSet<String>()
 
@@ -60,16 +61,45 @@ class GattClient(private val ctx: Context, private val listener: Listener) {
     }
 
     private fun ensureHeadsetProxy() {
-        if (headset != null) return
+        if (headset != null && a2dp != null) return
         try {
-            (ctx.getSystemService(Context.BLUETOOTH_SERVICE) as BluetoothManager).adapter.getProfileProxy(ctx,
-                object : BluetoothProfile.ServiceListener {
-                    override fun onServiceConnected(profile: Int, proxy: BluetoothProfile) {
-                        if (profile == BluetoothProfile.HEADSET) headset = proxy as BluetoothHeadset
-                    }
-                    override fun onServiceDisconnected(profile: Int) { if (profile == BluetoothProfile.HEADSET) headset = null }
-                }, BluetoothProfile.HEADSET)
-        } catch (e: Exception) { log("HFP-проксі: ${e.message}") }
+            val adapter = (ctx.getSystemService(Context.BLUETOOTH_SERVICE) as BluetoothManager).adapter
+            val l = object : BluetoothProfile.ServiceListener {
+                override fun onServiceConnected(profile: Int, proxy: BluetoothProfile) {
+                    if (profile == BluetoothProfile.HEADSET) headset = proxy as BluetoothHeadset
+                    if (profile == BluetoothProfile.A2DP) a2dp = proxy as BluetoothA2dp
+                }
+                override fun onServiceDisconnected(profile: Int) {
+                    if (profile == BluetoothProfile.HEADSET) headset = null
+                    if (profile == BluetoothProfile.A2DP) a2dp = null
+                }
+            }
+            if (headset == null) adapter.getProfileProxy(ctx, l, BluetoothProfile.HEADSET)
+            if (a2dp == null) adapter.getProfileProxy(ctx, l, BluetoothProfile.A2DP)
+        } catch (e: Exception) { log("HFP/A2DP-проксі: ${e.message}") }
+    }
+
+    /** Діагностика звуку: стан A2DP, кодек (прихований API, через рефлексію) і Wi-Fi (2,4 ГГц ділить ефір з Bluetooth). */
+    fun logAudio(tag: String) {
+        val d = target
+        val a = a2dp
+        if (a == null || d == null) log("[$tag] A2DP-проксі недоступне")
+        else {
+            val st = try { a.getConnectionState(d) } catch (e: Exception) { -1 }
+            val playing = try { a.isA2dpPlaying(d) } catch (e: Exception) { false }
+            var codec = "?"
+            try {
+                val cs = a.javaClass.getMethod("getCodecStatus", BluetoothDevice::class.java).invoke(a, d)
+                val cfg = cs?.javaClass?.getMethod("getCodecConfig")?.invoke(cs)
+                codec = cfg?.toString() ?: "null"
+            } catch (e: Exception) { codec = "недоступно (${e.javaClass.simpleName})" }
+            log("[$tag] A2DP conn=$st playing=$playing codec=$codec")
+        }
+        try {
+            val wm = ctx.applicationContext.getSystemService(Context.WIFI_SERVICE) as android.net.wifi.WifiManager
+            val i = wm.connectionInfo
+            log("[$tag] WiFi enabled=${wm.isWifiEnabled} freq=${i?.frequency} МГц rssi=${i?.rssi} speed=${i?.linkSpeed} Мбіт/с")
+        } catch (e: Exception) { log("[$tag] WiFi: ${e.message}") }
     }
 
     /** HFP vendor-команда, як в оригіналі: +ANDROID з аргументом WDXAPP:n (4 = BLE_Adv, 2 = BLE_Reb). */
@@ -166,6 +196,8 @@ class GattClient(private val ctx: Context, private val listener: Listener) {
     /** Лише GATT-від'єднання; пара та A2DP/HFP не чіпаються. */
     fun disconnect() {
         userDisconnect = true
+        log("disconnect() викликано користувачем (connected=$connected)")
+        logAudio("disconnect")
         cancelStages()
         stopScan()
         queue.clear(); busy = false
@@ -207,8 +239,9 @@ class GattClient(private val ctx: Context, private val listener: Listener) {
     private fun done() { busy = false; ui.post { pump() } }
 
     private fun initQueue() {
-        // не тримаємо агресивних параметрів з'єднання — менше конкуренції з A2DP
-        log("requestConnectionPriority(BALANCED) -> ${gatt?.requestConnectionPriority(BluetoothGatt.CONNECTION_PRIORITY_BALANCED)}")
+        // LOW_POWER: інтервал ~100–125 мс, BLE мінімально заважає A2DP
+        log("requestConnectionPriority(LOW_POWER) -> ${gatt?.requestConnectionPriority(BluetoothGatt.CONNECTION_PRIORITY_LOW_POWER)}")
+        logAudio("ready")
         ui.removeCallbacks(rssiTick); ui.postDelayed(rssiTick, 10_000)
         ComDex.NOTIFY_CHARS.forEach { enableNotify(ComDex.SERVICE, it) }
         listOf(ComDex.PROFILE, ComDex.NECKLOOP, ComDex.CHARGING, ComDex.BOOST).forEach { read(ComDex.SERVICE, it) }
@@ -220,7 +253,8 @@ class GattClient(private val ctx: Context, private val listener: Listener) {
 
     private val cb = object : BluetoothGattCallback() {
         override fun onConnectionStateChange(g: BluetoothGatt, status: Int, newState: Int) {
-            log("onConnectionStateChange status=$status (${statusName(status)}) newState=$newState")
+            log("onConnectionStateChange status=$status (${statusName(status)}) newState=$newState userDisconnect=$userDisconnect")
+            if (newState == BluetoothProfile.STATE_DISCONNECTED) ui.post { logAudio("gatt-off") }
             if (newState == BluetoothProfile.STATE_CONNECTED && status == 0) {
                 connected = true
                 ui.post { listener.onState("З'єднано, пошук сервісів…") }

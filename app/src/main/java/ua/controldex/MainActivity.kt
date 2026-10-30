@@ -51,6 +51,7 @@ class MainActivity : Activity(), GattClient.Listener {
             val prev = i.getIntExtra(android.bluetooth.BluetoothProfile.EXTRA_PREVIOUS_STATE, -1)
             log("SYS ${i.action?.substringAfterLast('.')} state=$st prev=$prev" +
                 if (i.action == android.bluetooth.BluetoothAdapter.ACTION_STATE_CHANGED) " adapter=${i.getIntExtra(android.bluetooth.BluetoothAdapter.EXTRA_STATE, -1)}" else "")
+            if (i.action == android.bluetooth.BluetoothA2dp.ACTION_PLAYING_STATE_CHANGED && st == android.bluetooth.BluetoothA2dp.STATE_PLAYING) gatt.logAudio("play")
         }
     }
 
