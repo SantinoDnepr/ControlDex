@@ -34,11 +34,6 @@ class GattClient(private val ctx: Context, private val listener: Listener) {
         private set
     /** Не слати WDXAPP:2 (BLE_Reb): перезапуск BLE у COM-DEX може псувати класичне аудіо. */
     var skipReboot = false
-    private val rssiTick = object : Runnable {
-        override fun run() {
-            if (connected) { gatt?.readRemoteRssi(); ui.postDelayed(this, 10_000) }
-        }
-    }
 
     private var target: BluetoothDevice? = null
     private var attempt = 0
@@ -239,10 +234,8 @@ class GattClient(private val ctx: Context, private val listener: Listener) {
     private fun done() { busy = false; ui.post { pump() } }
 
     private fun initQueue() {
-        // LOW_POWER: інтервал ~100–125 мс, BLE мінімально заважає A2DP
-        log("requestConnectionPriority(LOW_POWER) -> ${gatt?.requestConnectionPriority(BluetoothGatt.CONNECTION_PRIORITY_LOW_POWER)}")
+        // як в оригіналі й nRF Connect: параметри з'єднання не чіпаємо (requestConnectionPriority і RSSI-опитування ламали A2DP)
         logAudio("ready")
-        ui.removeCallbacks(rssiTick); ui.postDelayed(rssiTick, 10_000)
         ComDex.NOTIFY_CHARS.forEach { enableNotify(ComDex.SERVICE, it) }
         listOf(ComDex.PROFILE, ComDex.NECKLOOP, ComDex.CHARGING, ComDex.BOOST).forEach { read(ComDex.SERVICE, it) }
         read(ComDex.DEVINFO_SVC, ComDex.SERIAL)
@@ -261,7 +254,6 @@ class GattClient(private val ctx: Context, private val listener: Listener) {
                 ui.postDelayed({ g.discoverServices() }, 1000)
             } else {
                 connected = false
-                ui.removeCallbacks(rssiTick)
                 g.close(); if (gatt === g) gatt = null
                 queue.clear(); busy = false
                 ui.post {
@@ -273,10 +265,6 @@ class GattClient(private val ctx: Context, private val listener: Listener) {
                     }
                 }
             }
-        }
-
-        override fun onReadRemoteRssi(g: BluetoothGatt, rssi: Int, status: Int) {
-            log("RSSI=$rssi status=$status")
         }
 
         override fun onServicesDiscovered(g: BluetoothGatt, status: Int) {
