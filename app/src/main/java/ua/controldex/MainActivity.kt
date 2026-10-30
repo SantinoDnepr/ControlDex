@@ -41,6 +41,18 @@ class MainActivity : Activity(), GattClient.Listener {
     private lateinit var boostSwitch: Switch
     private val controls = mutableListOf<View>()
     private val ui = Handler(Looper.getMainLooper())
+    private lateinit var fileLog: FileLog
+    private val prefs by lazy { getSharedPreferences("controldex", MODE_PRIVATE) }
+
+    /** Системні події BT: допомагають зіставити заїкання з A2DP/HFP/станом адаптера. */
+    private val btReceiver = object : android.content.BroadcastReceiver() {
+        override fun onReceive(c: android.content.Context, i: Intent) {
+            val st = i.getIntExtra(android.bluetooth.BluetoothProfile.EXTRA_STATE, -1)
+            val prev = i.getIntExtra(android.bluetooth.BluetoothProfile.EXTRA_PREVIOUS_STATE, -1)
+            log("SYS ${i.action?.substringAfterLast('.')} state=$st prev=$prev" +
+                if (i.action == android.bluetooth.BluetoothAdapter.ACTION_STATE_CHANGED) " adapter=${i.getIntExtra(android.bluetooth.BluetoothAdapter.EXTRA_STATE, -1)}" else "")
+        }
+    }
 
     private var profile = -1
     private var charging = 0
@@ -60,12 +72,22 @@ class MainActivity : Activity(), GattClient.Listener {
 
     override fun onCreate(b: Bundle?) {
         super.onCreate(b)
+        fileLog = FileLog(this)
         gatt = GattClient(this, this)
+        val f = android.content.IntentFilter().apply {
+            addAction(android.bluetooth.BluetoothA2dp.ACTION_PLAYING_STATE_CHANGED)
+            addAction(android.bluetooth.BluetoothA2dp.ACTION_CONNECTION_STATE_CHANGED)
+            addAction(android.bluetooth.BluetoothHeadset.ACTION_CONNECTION_STATE_CHANGED)
+            addAction(android.bluetooth.BluetoothHeadset.ACTION_AUDIO_STATE_CHANGED)
+            addAction(android.bluetooth.BluetoothAdapter.ACTION_STATE_CHANGED)
+        }
+        if (Build.VERSION.SDK_INT >= 33) registerReceiver(btReceiver, f, RECEIVER_EXPORTED) else registerReceiver(btReceiver, f)
+        log("=== ControlDex v0.4 запущено ===")
         val root = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(24, 24, 24, 24) }
         setContentView(ScrollView(this).apply { addView(root) })
 
         status = TextView(this).apply { textSize = 18f; text = "Відключено" }
-        title = "ControlDex v0.3"
+        title = "ControlDex v0.4"
         info = TextView(this)
         root.addView(status)
         root.addView(info)
@@ -119,9 +141,24 @@ class MainActivity : Activity(), GattClient.Listener {
         controls += boostSwitch
         root.addView(boostSwitch)
 
-        root.addView(btn("Копіювати журнал") {
-            (getSystemService(CLIPBOARD_SERVICE) as ClipboardManager).setPrimaryClip(ClipData.newPlainText("log", logLines.reversed().joinToString("\n")))
-        })
+        root.addView(btn("⚠ Заїкається!") { log("=== MARK: заїкання звуку ===") })
+        val rebootOff = android.widget.CheckBox(this).apply {
+            text = "Не слати BLE_Reb (WDXAPP:2)"
+            isChecked = prefs.getBoolean("skipReboot", false)
+            gatt.skipReboot = isChecked
+            setOnCheckedChangeListener { _, on -> prefs.edit().putBoolean("skipReboot", on).apply(); gatt.skipReboot = on }
+        }
+        root.addView(rebootOff)
+        val logRow = LinearLayout(this)
+        logRow.addView(btn("Копіювати журнал") {
+            (getSystemService(CLIPBOARD_SERVICE) as ClipboardManager).setPrimaryClip(ClipData.newPlainText("log", fileLog.tail(200_000)))
+        }, lp())
+        logRow.addView(btn("Поділитися") {
+            startActivity(Intent.createChooser(Intent(Intent.ACTION_SEND).setType("text/plain")
+                .putExtra(Intent.EXTRA_TEXT, fileLog.tail(60_000)), "Журнал ControlDex"))
+        }, lp())
+        root.addView(logRow)
+        root.addView(TextView(this).apply { textSize = 11f; text = "Файл журналу: ${fileLog.file.absolutePath}" })
         root.addView(label("Журнал"))
         logView = TextView(this).apply { textSize = 11f }
         root.addView(logView)
@@ -252,12 +289,21 @@ class MainActivity : Activity(), GattClient.Listener {
     private fun btn(t: String, a: () -> Unit) = Button(this).apply { text = t; setOnClickListener { a() } }
     private fun ctl(t: String, a: () -> Unit) = btn(t, a).also { controls += it }
     private fun log(s: String) {
-        logLines.addLast("${timeFmt.format(Date())} $s")
+        val line = "${timeFmt.format(Date())} $s"
+        fileLog.add(line)
+        logLines.addLast(line)
         while (logLines.size > 150) logLines.removeFirst()
-        logView.text = logLines.reversed().joinToString("\n")
+        if (::logView.isInitialized) logView.text = logLines.reversed().joinToString("\n")
+    }
+
+    override fun onStop() {
+        fileLog.flush()
+        super.onStop()
     }
 
     override fun onDestroy() {
+        try { unregisterReceiver(btReceiver) } catch (_: Exception) {}
+        fileLog.flush()
         ui.removeCallbacks(batteryTick)
         gatt.disconnect()
         super.onDestroy()

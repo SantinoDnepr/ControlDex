@@ -24,5 +24,5 @@ jobs:
           }
       - uses: actions/upload-artifact@v4
         with:
-          name: ControlDex-v0.3-build${{ github.run_number }}
+          name: ControlDex-v0.4-build${{ github.run_number }}
           path: app/build/outputs/apk/debug/*.apk

@@ -32,6 +32,13 @@ class GattClient(private val ctx: Context, private val listener: Listener) {
     private var userDisconnect = false
     var connected = false
         private set
+    /** Не слати WDXAPP:2 (BLE_Reb): перезапуск BLE у COM-DEX може псувати класичне аудіо. */
+    var skipReboot = false
+    private val rssiTick = object : Runnable {
+        override fun run() {
+            if (connected) { gatt?.readRemoteRssi(); ui.postDelayed(this, 10_000) }
+        }
+    }
 
     private var target: BluetoothDevice? = null
     private var attempt = 0
@@ -101,7 +108,7 @@ class GattClient(private val ctx: Context, private val listener: Listener) {
             listener.onState("COM-DEX не рекламується — команда BLE_Adv…")
             vendorCmd("WDXAPP:4")
         }
-        stage(8000) {
+        if (!skipReboot) stage(8000) {
             log("Усе ще не в ефірі (бачить ${seen.size}). Надсилаю BLE_Reb")
             listener.onState("Команда BLE_Reb (звук може коротко перерватись)…")
             vendorCmd("WDXAPP:2")
@@ -200,6 +207,9 @@ class GattClient(private val ctx: Context, private val listener: Listener) {
     private fun done() { busy = false; ui.post { pump() } }
 
     private fun initQueue() {
+        // не тримаємо агресивних параметрів з'єднання — менше конкуренції з A2DP
+        log("requestConnectionPriority(BALANCED) -> ${gatt?.requestConnectionPriority(BluetoothGatt.CONNECTION_PRIORITY_BALANCED)}")
+        ui.removeCallbacks(rssiTick); ui.postDelayed(rssiTick, 10_000)
         ComDex.NOTIFY_CHARS.forEach { enableNotify(ComDex.SERVICE, it) }
         listOf(ComDex.PROFILE, ComDex.NECKLOOP, ComDex.CHARGING, ComDex.BOOST).forEach { read(ComDex.SERVICE, it) }
         read(ComDex.DEVINFO_SVC, ComDex.SERIAL)
@@ -217,6 +227,7 @@ class GattClient(private val ctx: Context, private val listener: Listener) {
                 ui.postDelayed({ g.discoverServices() }, 1000)
             } else {
                 connected = false
+                ui.removeCallbacks(rssiTick)
                 g.close(); if (gatt === g) gatt = null
                 queue.clear(); busy = false
                 ui.post {
@@ -228,6 +239,14 @@ class GattClient(private val ctx: Context, private val listener: Listener) {
                     }
                 }
             }
+        }
+
+        override fun onConnectionUpdated(g: BluetoothGatt, interval: Int, latency: Int, timeout: Int, status: Int) {
+            log("ConnParams interval=${interval * 1.25} мс latency=$latency timeout=${timeout * 10} мс status=$status")
+        }
+
+        override fun onReadRemoteRssi(g: BluetoothGatt, rssi: Int, status: Int) {
+            log("RSSI=$rssi status=$status")
         }
 
         override fun onServicesDiscovered(g: BluetoothGatt, status: Int) {
