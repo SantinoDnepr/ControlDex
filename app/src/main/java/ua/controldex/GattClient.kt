@@ -241,10 +241,6 @@ class GattClient(private val ctx: Context, private val listener: Listener) {
             }
         }
 
-        override fun onConnectionUpdated(g: BluetoothGatt, interval: Int, latency: Int, timeout: Int, status: Int) {
-            log("ConnParams interval=${interval * 1.25} мс latency=$latency timeout=${timeout * 10} мс status=$status")
-        }
-
         override fun onReadRemoteRssi(g: BluetoothGatt, rssi: Int, status: Int) {
             log("RSSI=$rssi status=$status")
         }
