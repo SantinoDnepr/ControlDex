@@ -154,9 +154,17 @@ class MainActivity : Activity(), GattClient.Listener {
         logRow.addView(btn("Копіювати журнал") {
             (getSystemService(CLIPBOARD_SERVICE) as ClipboardManager).setPrimaryClip(ClipData.newPlainText("log", fileLog.tail(200_000)))
         }, lp())
-        logRow.addView(btn("Поділитися") {
-            startActivity(Intent.createChooser(Intent(Intent.ACTION_SEND).setType("text/plain")
-                .putExtra(Intent.EXTRA_TEXT, fileLog.tail(60_000)), "Журнал ControlDex"))
+        logRow.addView(btn("Поділитися (zip)") {
+            val zip = fileLog.makeZip(cacheDir)
+            if (zip == null) android.widget.Toast.makeText(this, "Не вдалося створити zip", android.widget.Toast.LENGTH_LONG).show()
+            else {
+                val uri = android.net.Uri.parse("content://ua.controldex.logs/${zip.name}")
+                val send = Intent(Intent.ACTION_SEND).setType("application/zip")
+                    .putExtra(Intent.EXTRA_STREAM, uri)
+                    .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                send.clipData = ClipData.newRawUri("", uri)
+                startActivity(Intent.createChooser(send, "Журнал ControlDex"))
+            }
         }, lp())
         root.addView(logRow)
         root.addView(TextView(this).apply { textSize = 11f; text = "Файл журналу: ${fileLog.file.absolutePath}" })
@@ -307,6 +315,7 @@ class MainActivity : Activity(), GattClient.Listener {
         fileLog.flush()
         ui.removeCallbacks(batteryTick)
         gatt.disconnect()
+        gatt.release()
         super.onDestroy()
     }
 }

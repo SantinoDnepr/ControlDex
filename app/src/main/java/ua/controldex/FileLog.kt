@@ -56,6 +56,23 @@ class FileLog(ctx: Context) {
         } catch (_: Exception) { "" }
     }
 
+    /** Увесь журнал (старий + поточний файл) одним текстовим файлом у zip у [dir]; старі zip видаляються. */
+    fun makeZip(dir: File): File? {
+        flushNow2()
+        return try {
+            dir.listFiles { f -> f.name.startsWith("controldex-log-") && f.name.endsWith(".zip") }?.forEach { it.delete() }
+            val name = "controldex-log-${java.text.SimpleDateFormat("yyyyMMdd-HHmmss", java.util.Locale.US).format(java.util.Date())}.zip"
+            val zip = File(dir, name)
+            java.util.zip.ZipOutputStream(FileOutputStream(zip)).use { z ->
+                z.putNextEntry(java.util.zip.ZipEntry("controldex.log"))
+                if (old.exists()) old.inputStream().use { it.copyTo(z) }
+                if (file.exists()) file.inputStream().use { it.copyTo(z) }
+                z.closeEntry()
+            }
+            zip
+        } catch (_: Exception) { null }
+    }
+
     // синхронний скид для tail(): виконуємо на потоці журналу й чекаємо
     private fun flushNow2() {
         val l = java.util.concurrent.CountDownLatch(1)

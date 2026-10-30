@@ -74,6 +74,16 @@ class GattClient(private val ctx: Context, private val listener: Listener) {
         } catch (e: Exception) { log("HFP/A2DP-проксі: ${e.message}") }
     }
 
+    /** Закрити HFP/A2DP-проксі (onDestroy), інакше ServiceConnection тече разом з Activity. */
+    fun release() {
+        try {
+            val adapter = (ctx.getSystemService(Context.BLUETOOTH_SERVICE) as BluetoothManager).adapter
+            headset?.let { adapter.closeProfileProxy(BluetoothProfile.HEADSET, it) }
+            a2dp?.let { adapter.closeProfileProxy(BluetoothProfile.A2DP, it) }
+        } catch (_: Exception) {}
+        headset = null; a2dp = null
+    }
+
     /** Діагностика звуку: стан A2DP, кодек (прихований API, через рефлексію) і Wi-Fi (2,4 ГГц ділить ефір з Bluetooth). */
     fun logAudio(tag: String) {
         val d = target
