@@ -16,7 +16,9 @@ import java.util.UUID
 /** Мінімальний GATT-клієнт з послідовною чергою операцій (Android допускає лише одну незавершену). */
 @SuppressLint("MissingPermission")
 @Suppress("DEPRECATION")
-class GattClient(private val ctx: Context, private val listener: Listener) {
+class GattClient(context: Context, var listener: Listener) {
+    /** Контекст застосунку: клієнт переживає перестворення Activity (зміна теми, поворот екрана). */
+    private val ctx: Context = context.applicationContext
 
     interface Listener {
         fun onState(text: String)
@@ -37,7 +39,7 @@ class GattClient(private val ctx: Context, private val listener: Listener) {
     /** Не підписуватись на нотифікації й явно вимкнути CCCD у COM-DEX (як nRF Connect без підписок). */
     var noNotify = false
     /** Режим GREEN оригіналу: GATT через класичний Bluetooth (BR/EDR), без окремого BLE-каналу. */
-    var greenMode = false
+    var greenMode = true
     private var greenRebootSent = false
     private var profileRx: android.content.BroadcastReceiver? = null
 
@@ -325,7 +327,7 @@ class GattClient(private val ctx: Context, private val listener: Listener) {
 
     /** Ручне оновлення стану (для режиму без нотифікацій). */
     fun refreshState() {
-        listOf(ComDex.PROFILE, ComDex.NECKLOOP, ComDex.CHARGING, ComDex.BOOST).forEach { read(ComDex.SERVICE, it) }
+        listOf(ComDex.PROFILE, ComDex.MIC_CTRL, ComDex.NECKLOOP, ComDex.CHARGING, ComDex.BOOST).forEach { read(ComDex.SERVICE, it) }
         read(ComDex.BATTERY_SVC, ComDex.BATTERY_LVL)
     }
 
@@ -351,7 +353,7 @@ class GattClient(private val ctx: Context, private val listener: Listener) {
             log("Нотифікації вимкнено: записую CCCD=0000, стан читається лише за запитом")
             ComDex.NOTIFY_CHARS.forEach { disableNotify(ComDex.SERVICE, it) }
         } else ComDex.NOTIFY_CHARS.forEach { enableNotify(ComDex.SERVICE, it) }
-        listOf(ComDex.PROFILE, ComDex.NECKLOOP, ComDex.CHARGING, ComDex.BOOST).forEach { read(ComDex.SERVICE, it) }
+        listOf(ComDex.PROFILE, ComDex.MIC_CTRL, ComDex.NECKLOOP, ComDex.CHARGING, ComDex.BOOST).forEach { read(ComDex.SERVICE, it) }
         read(ComDex.DEVINFO_SVC, ComDex.SERIAL)
         read(ComDex.DEVINFO_SVC, ComDex.FW_REV)
         read(ComDex.BATTERY_SVC, ComDex.BATTERY_LVL)

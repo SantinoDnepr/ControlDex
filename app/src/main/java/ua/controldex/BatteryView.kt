@@ -24,7 +24,7 @@ class BatteryView(ctx: Context) : View(ctx) {
         val d = resources.displayMetrics.density
         val bw = width - 5 * d
         val body = RectF(1 * d, 1 * d, bw, height - 1 * d)
-        p.style = Paint.Style.STROKE; p.strokeWidth = 2 * d; p.color = 0xFF555555.toInt()
+        p.style = Paint.Style.STROKE; p.strokeWidth = 2 * d; p.color = 0xFF888888.toInt()
         c.drawRoundRect(body, 3 * d, 3 * d, p)
         p.style = Paint.Style.FILL
         c.drawRect(bw, height * 0.32f, width - 1 * d, height * 0.68f, p)

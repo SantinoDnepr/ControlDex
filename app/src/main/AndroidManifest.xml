@@ -17,6 +17,7 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+        <activity android:name=".PageActivity" android:exported="false" android:parentActivityName=".MainActivity" />
         <provider android:name=".LogProvider" android:authorities="ua.controldex.logs"
             android:exported="false" android:grantUriPermissions="true" />
     </application>

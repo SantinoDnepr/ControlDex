@@ -35,5 +35,9 @@ object ComDex {
     val FOCUS_LEFT = hex("A2 01 40 A8 20 11 00 10 00 00 0E 10 13 D4 B4")
     val FOCUS_RIGHT = hex("A2 01 40 A8 20 11 00 10 00 00 0F 10 13 6E 19")
 
+    /** MICROPHONE_CONTROL: 1 = мікрофони слухових апаратів увімкнено, 0 = вимкнено (як MicrophoneStatus оригіналу). */
+    const val MIC_ON: Byte = 1
+    const val MIC_OFF: Byte = 0
+
     val PROFILE_NAMES = mapOf(0 to "не підключено", 1 to "Idle", 2 to "HFP (дзвінок)", 3 to "A2DP (музика)", 4 to "Remote Mic")
 }
