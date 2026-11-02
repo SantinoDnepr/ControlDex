@@ -10,8 +10,8 @@ android {
         applicationId = "ua.controldex"
         minSdk = 26
         targetSdk = 34
-        versionCode = 4
-        versionName = "0.4"
+        versionCode = 5
+        versionName = "0.5"
     }
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17

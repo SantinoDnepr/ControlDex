@@ -34,6 +34,12 @@ class GattClient(private val ctx: Context, private val listener: Listener) {
         private set
     /** Не слати WDXAPP:2 (BLE_Reb): перезапуск BLE у COM-DEX може псувати класичне аудіо. */
     var skipReboot = false
+    /** Не підписуватись на нотифікації й явно вимкнути CCCD у COM-DEX (як nRF Connect без підписок). */
+    var noNotify = false
+    /** Режим GREEN оригіналу: GATT через класичний Bluetooth (BR/EDR), без окремого BLE-каналу. */
+    var greenMode = false
+    private var greenRebootSent = false
+    private var profileRx: android.content.BroadcastReceiver? = null
 
     private var target: BluetoothDevice? = null
     private var attempt = 0
@@ -49,6 +55,8 @@ class GattClient(private val ctx: Context, private val listener: Listener) {
         target = device
         attempt = 0
         initDone = false
+        greenRebootSent = false
+        log("Режими: ${if (greenMode) "GREEN (GATT через BR/EDR)" else "BLUE (GATT через BLE)"}, нотифікації=${if (noNotify) "вимкнено" else "увімкнено"}")
         log("Android ${Build.VERSION.SDK_INT}, ${Build.MANUFACTURER} ${Build.MODEL}")
         log("Пристрій ${device.name} ${device.address}, type=${device.type} (1 classic, 2 LE, 3 dual), bond=${device.bondState}")
         ensureHeadsetProxy()
@@ -76,6 +84,7 @@ class GattClient(private val ctx: Context, private val listener: Listener) {
 
     /** Закрити HFP/A2DP-проксі (onDestroy), інакше ServiceConnection тече разом з Activity. */
     fun release() {
+        unregisterProfileRx()
         try {
             val adapter = (ctx.getSystemService(Context.BLUETOOTH_SERVICE) as BluetoothManager).adapter
             headset?.let { adapter.closeProfileProxy(BluetoothProfile.HEADSET, it) }
@@ -123,6 +132,8 @@ class GattClient(private val ctx: Context, private val listener: Listener) {
     private fun begin() {
         cancelStages()
         stopScan()
+        unregisterProfileRx()
+        if (greenMode) { beginGreen(); return }
         if (Build.VERSION.SDK_INT >= 31 && ctx.checkSelfPermission(android.Manifest.permission.BLUETOOTH_SCAN) != PackageManager.PERMISSION_GRANTED) {
             log("Немає дозволу BLUETOOTH_SCAN — підключаюсь напряму"); doConnect(); return
         }
@@ -153,6 +164,79 @@ class GattClient(private val ctx: Context, private val listener: Listener) {
             stopScan()
             doConnect(auto = true)
         }
+    }
+
+    /**
+     * GREEN, як в оригіналі: без BLE-сканування. Спершу пробуємо GATT через BR/EDR одразу
+     * (COM-DEX міг залишитися в цьому режимі). Не вийшло — BR_EDR_Reb (WDXAPP:3), чекаємо,
+     * поки COM-DEX перепідключить HFP і A2DP, і пробуємо знову.
+     */
+    private fun beginGreen() {
+        listener.onState("GREEN: підключення GATT через класичний Bluetooth…")
+        doConnect()
+        stage(15000) {
+            if (!connected) { log("GREEN: немає з'єднання за 15 с"); greenFallback() }
+        }
+    }
+
+    private fun greenFallback() {
+        if (!greenRebootSent) sendGreenReboot()
+        else { gatt?.close(); gatt = null; listener.onState("GREEN не вдався: COM-DEX не відповідає по BR/EDR") }
+    }
+
+    private fun sendGreenReboot() {
+        cancelStages()
+        greenRebootSent = true
+        gatt?.close(); gatt = null
+        connected = false
+        queue.clear(); busy = false
+        log("GREEN: надсилаю BR_EDR_Reb (WDXAPP:3), COM-DEX перезапуститься в режимі BR/EDR")
+        listener.onState("GREEN: перезапуск COM-DEX (звук коротко перерветься)…")
+        registerProfileRx()
+        vendorCmd("WDXAPP:3")
+        stage(40000) {
+            unregisterProfileRx()
+            log("GREEN: HFP/A2DP не перепідключились за 40 с, пробую GATT усе одно")
+            doConnect()
+            stage(15000) { if (!connected) greenFallback() }
+        }
+    }
+
+    /** Як в оригіналі (BluetoothProfileConnectionStateReceiver): GATT після того, як підключені і HFP, і A2DP. */
+    private fun registerProfileRx() {
+        unregisterProfileRx()
+        val rx = object : android.content.BroadcastReceiver() {
+            override fun onReceive(c: Context, i: android.content.Intent) {
+                val d = target ?: return
+                val st = i.getIntExtra(BluetoothProfile.EXTRA_STATE, -1)
+                val dev: BluetoothDevice? = i.getParcelableExtra(BluetoothDevice.EXTRA_DEVICE)
+                if (dev?.address != d.address || st != BluetoothProfile.STATE_CONNECTED) return
+                val hfp = try { headset?.getConnectionState(d) } catch (_: Exception) { null }
+                val a2 = try { a2dp?.getConnectionState(d) } catch (_: Exception) { null }
+                log("GREEN: профілі після перезапуску HFP=$hfp A2DP=$a2")
+                if (hfp == BluetoothProfile.STATE_CONNECTED && a2 == BluetoothProfile.STATE_CONNECTED) {
+                    unregisterProfileRx()
+                    cancelStages()
+                    log("GREEN: HFP і A2DP підключені, GATT через BR/EDR за 2 с")
+                    stage(2000) { doConnect() }
+                    stage(17000) { if (!connected) { log("GREEN: немає з'єднання за 15 с після перезапуску"); greenFallback() } }
+                }
+            }
+        }
+        val f = android.content.IntentFilter().apply {
+            addAction(BluetoothHeadset.ACTION_CONNECTION_STATE_CHANGED)
+            addAction(BluetoothA2dp.ACTION_CONNECTION_STATE_CHANGED)
+        }
+        try {
+            if (Build.VERSION.SDK_INT >= 33) ctx.registerReceiver(rx, f, Context.RECEIVER_EXPORTED) else ctx.registerReceiver(rx, f)
+            profileRx = rx
+        } catch (e: Exception) { log("GREEN: receiver: ${e.message}") }
+    }
+
+    private fun unregisterProfileRx() {
+        val rx = profileRx ?: return
+        profileRx = null
+        try { ctx.unregisterReceiver(rx) } catch (_: Exception) {}
     }
 
     private fun onSeen(r: ScanResult) {
@@ -187,8 +271,9 @@ class GattClient(private val ctx: Context, private val listener: Listener) {
         attempt++
         gatt?.close(); gatt = null
         listener.onState(if (auto) "Очікування COM-DEX (autoConnect)…" else "Підключення до ${d.name}, спроба $attempt…")
-        log("connectGatt(LE, autoConnect=$auto) ${d.address}, спроба $attempt")
-        gatt = d.connectGatt(ctx, auto, cb, BluetoothDevice.TRANSPORT_LE)
+        val tr = if (greenMode) BluetoothDevice.TRANSPORT_BREDR else BluetoothDevice.TRANSPORT_LE
+        log("connectGatt(${if (greenMode) "BR/EDR" else "LE"}, autoConnect=$auto) ${d.address}, спроба $attempt")
+        gatt = d.connectGatt(ctx, auto, cb, tr)
     }
 
     private fun statusName(s: Int) = when (s) {
@@ -205,6 +290,7 @@ class GattClient(private val ctx: Context, private val listener: Listener) {
         logAudio("disconnect")
         cancelStages()
         stopScan()
+        unregisterProfileRx()
         queue.clear(); busy = false
         gatt?.disconnect()
         if (!connected) { gatt?.close(); gatt = null; listener.onState("Відключено") }
@@ -228,6 +314,21 @@ class GattClient(private val ctx: Context, private val listener: Listener) {
         gatt?.writeDescriptor(d) ?: false
     }
 
+    /** Вимкнути нотифікацію і в самому COM-DEX: CCCD у спареного пристрою зберігається між з'єднаннями. */
+    private fun disableNotify(svc: UUID, chr: UUID) = enqueue {
+        val c = find(svc, chr) ?: return@enqueue false
+        gatt?.setCharacteristicNotification(c, false)
+        val d = c.getDescriptor(ComDex.CCCD) ?: return@enqueue false
+        d.value = BluetoothGattDescriptor.DISABLE_NOTIFICATION_VALUE
+        gatt?.writeDescriptor(d) ?: false
+    }
+
+    /** Ручне оновлення стану (для режиму без нотифікацій). */
+    fun refreshState() {
+        listOf(ComDex.PROFILE, ComDex.NECKLOOP, ComDex.CHARGING, ComDex.BOOST).forEach { read(ComDex.SERVICE, it) }
+        read(ComDex.BATTERY_SVC, ComDex.BATTERY_LVL)
+    }
+
     private fun enqueue(op: () -> Boolean) {
         ui.post { queue.addLast(op); pump() }
     }
@@ -246,7 +347,10 @@ class GattClient(private val ctx: Context, private val listener: Listener) {
     private fun initQueue() {
         // як в оригіналі й nRF Connect: параметри з'єднання не чіпаємо (requestConnectionPriority і RSSI-опитування ламали A2DP)
         logAudio("ready")
-        ComDex.NOTIFY_CHARS.forEach { enableNotify(ComDex.SERVICE, it) }
+        if (noNotify) {
+            log("Нотифікації вимкнено: записую CCCD=0000, стан читається лише за запитом")
+            ComDex.NOTIFY_CHARS.forEach { disableNotify(ComDex.SERVICE, it) }
+        } else ComDex.NOTIFY_CHARS.forEach { enableNotify(ComDex.SERVICE, it) }
         listOf(ComDex.PROFILE, ComDex.NECKLOOP, ComDex.CHARGING, ComDex.BOOST).forEach { read(ComDex.SERVICE, it) }
         read(ComDex.DEVINFO_SVC, ComDex.SERIAL)
         read(ComDex.DEVINFO_SVC, ComDex.FW_REV)
@@ -267,7 +371,10 @@ class GattClient(private val ctx: Context, private val listener: Listener) {
                 g.close(); if (gatt === g) gatt = null
                 queue.clear(); busy = false
                 ui.post {
-                    if (!userDisconnect && !initDone && attempt < 4) {
+                    if (greenMode && !userDisconnect && !initDone && !greenRebootSent) {
+                        log("GREEN: GATT через BR/EDR не вдався (код $status)")
+                        sendGreenReboot()
+                    } else if (!userDisconnect && !initDone && attempt < 4) {
                         log("Невдача, повтор усього потоку через 1,5 с")
                         ui.postDelayed({ if (!userDisconnect) begin() }, 1500)
                     } else {
@@ -280,6 +387,11 @@ class GattClient(private val ctx: Context, private val listener: Listener) {
         override fun onServicesDiscovered(g: BluetoothGatt, status: Int) {
             if (status == 0 && g.getService(ComDex.SERVICE)?.getCharacteristic(ComDex.PROFILE) != null) {
                 ui.post { initQueue() }
+            } else if (greenMode && !greenRebootSent) {
+                ui.post {
+                    log("GREEN: сервіс COM-DEX не видно через BR/EDR (status=$status)")
+                    sendGreenReboot()
+                }
             } else {
                 ui.post { listener.onState("Пристрій не підтримується (немає сервісу COM-DEX)"); disconnect() }
             }

@@ -83,12 +83,12 @@ class MainActivity : Activity(), GattClient.Listener {
             addAction(android.bluetooth.BluetoothAdapter.ACTION_STATE_CHANGED)
         }
         if (Build.VERSION.SDK_INT >= 33) registerReceiver(btReceiver, f, RECEIVER_EXPORTED) else registerReceiver(btReceiver, f)
-        log("=== ControlDex v0.4 запущено ===")
+        log("=== ControlDex v0.5 запущено ===")
         val root = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(24, 24, 24, 24) }
         setContentView(ScrollView(this).apply { addView(root) })
 
         status = TextView(this).apply { textSize = 18f; text = "Відключено" }
-        title = "ControlDex v0.4"
+        title = "ControlDex v0.5"
         info = TextView(this)
         root.addView(status)
         root.addView(info)
@@ -150,6 +150,22 @@ class MainActivity : Activity(), GattClient.Listener {
             setOnCheckedChangeListener { _, on -> prefs.edit().putBoolean("skipReboot", on).apply(); gatt.skipReboot = on }
         }
         root.addView(rebootOff)
+        root.addView(label("A/B-тест заїкання (діє з наступного «Підключитися»)"))
+        val noNotifyBox = android.widget.CheckBox(this).apply {
+            text = "Без нотифікацій (як nRF Connect)"
+            isChecked = prefs.getBoolean("noNotify", false)
+            gatt.noNotify = isChecked
+            setOnCheckedChangeListener { _, on -> prefs.edit().putBoolean("noNotify", on).apply(); gatt.noNotify = on; log("Опція: без нотифікацій = $on") }
+        }
+        root.addView(noNotifyBox)
+        val greenBox = android.widget.CheckBox(this).apply {
+            text = "Режим GREEN: GATT через класичний Bluetooth (BR/EDR)"
+            isChecked = prefs.getBoolean("greenMode", false)
+            gatt.greenMode = isChecked
+            setOnCheckedChangeListener { _, on -> prefs.edit().putBoolean("greenMode", on).apply(); gatt.greenMode = on; log("Опція: режим GREEN = $on") }
+        }
+        root.addView(greenBox)
+        root.addView(btn("Оновити стан COM-DEX") { if (ready) gatt.refreshState() })
         val logRow = LinearLayout(this)
         logRow.addView(btn("Копіювати журнал") {
             (getSystemService(CLIPBOARD_SERVICE) as ClipboardManager).setPrimaryClip(ClipData.newPlainText("log", fileLog.tail(200_000)))
