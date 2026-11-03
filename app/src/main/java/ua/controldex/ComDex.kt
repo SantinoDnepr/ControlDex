@@ -8,6 +8,8 @@ object ComDex {
     private fun w(suffix: String) = u("95986f2d-d705-4421-9890-2d32bff7$suffix")
 
     val SERVICE = w("0000")
+    /** SELECT_PROGRAM: оригінал лише оголошує, не читає й не пише. */
+    val SELECT_PROGRAM = w("0002")
     val MIC_CTRL = w("0003")
     val NECKLOOP = w("0004")
     val PROFILE = w("0005")

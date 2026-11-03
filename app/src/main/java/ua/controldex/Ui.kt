@@ -9,15 +9,21 @@ object Ui {
     const val PREFS = "controldex"
     const val KEY_DEBUG = "debug"
     const val KEY_THEME = "theme"
+    const val KEY_GREEN = "greenMode"
+    const val KEY_AUTO = "autoConnect"
+    const val KEY_LAST_MAC = "lastMac"
     const val THEME_LIGHT = 0
     const val THEME_DARK = 1
     const val THEME_SYSTEM = 2
 
-    const val VERSION = "0.6"
+    const val VERSION = "0.7"
 
     fun prefs(c: Context) = c.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
     fun themeMode(c: Context) = prefs(c).getInt(KEY_THEME, THEME_SYSTEM)
     fun debug(c: Context) = prefs(c).getBoolean(KEY_DEBUG, false)
+    /** Режим GREEN: GATT через класичний Bluetooth (типово увімкнено). */
+    fun greenMode(c: Context) = prefs(c).getBoolean(KEY_GREEN, true)
+    fun autoConnect(c: Context) = prefs(c).getBoolean(KEY_AUTO, true)
 
     fun isDark(a: Activity): Boolean = when (themeMode(a)) {
         THEME_LIGHT -> false

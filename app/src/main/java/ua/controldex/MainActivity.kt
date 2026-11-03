@@ -10,6 +10,7 @@ import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.content.res.ColorStateList
 import android.media.AudioManager
 import android.os.Build
 import android.os.Bundle
@@ -17,8 +18,10 @@ import android.os.Handler
 import android.os.Looper
 import android.provider.Settings
 import android.view.Gravity
+import android.view.HapticFeedbackConstants
 import android.view.Menu
 import android.view.MenuItem
+import android.view.MotionEvent
 import android.view.View
 import android.widget.Button
 import android.widget.FrameLayout
@@ -27,98 +30,47 @@ import android.widget.PopupMenu
 import android.widget.ScrollView
 import android.widget.Switch
 import android.widget.TextView
-import java.text.SimpleDateFormat
-import java.util.Date
-import java.util.Locale
-import java.util.UUID
 
-@SuppressLint("MissingPermission", "SetTextI18n")
-class MainActivity : Activity(), GattClient.Listener {
+@SuppressLint("MissingPermission", "SetTextI18n", "ClickableViewAccessibility")
+class MainActivity : Activity(), Core.View {
 
-    /** Те, що має пережити перестворення Activity (зміна теми, поворот): з'єднання й стан COM-DEX. */
-    private class Kept(val gatt: GattClient) {
-        var profile = -1
-        var charging = 0
-        var neckloop = 1
-        var battery = -1
-        var mic = -1
-        var boost = -1
-        var fw = "?"
-        var serial = "?"
-        var ready = false
-        var status = "Відключено"
-        val logLines = ArrayDeque<String>()
-    }
-
-    private lateinit var k: Kept
-    private val gatt get() = k.gatt
+    private val k = Core
+    private val gatt get() = Core.gatt
     private lateinit var status: TextView
     private lateinit var info: TextView
     private lateinit var logView: TextView
     private lateinit var batteryView: BatteryView
     private lateinit var batteryText: TextView
     private lateinit var micBtn: Button
+    private lateinit var muteBtn: Button
+    private lateinit var progInfo: TextView
     private lateinit var debugPanel: LinearLayout
     private lateinit var menuAnchor: View
-    private val timeFmt = SimpleDateFormat("HH:mm:ss.SSS", Locale.US)
     private lateinit var boostSwitch: Switch
     private val controls = mutableListOf<View>()
+    private val focusBtns = mutableListOf<Pair<ByteArray, Button>>()
     private val ui = Handler(Looper.getMainLooper())
-    private lateinit var fileLog: FileLog
     private val prefs by lazy { Ui.prefs(this) }
     private var updatingBoost = false
     private var themeAtCreate = -1
     private var darkAtCreate = false
+    private var muteLocked = false
     private val dp by lazy { resources.displayMetrics.density }
-
-    /** Системні події BT: допомагають зіставити заїкання з A2DP/HFP/станом адаптера. */
-    private val btReceiver = object : android.content.BroadcastReceiver() {
-        override fun onReceive(c: android.content.Context, i: Intent) {
-            val st = i.getIntExtra(android.bluetooth.BluetoothProfile.EXTRA_STATE, -1)
-            val prev = i.getIntExtra(android.bluetooth.BluetoothProfile.EXTRA_PREVIOUS_STATE, -1)
-            log("SYS ${i.action?.substringAfterLast('.')} state=$st prev=$prev" +
-                if (i.action == android.bluetooth.BluetoothAdapter.ACTION_STATE_CHANGED) " adapter=${i.getIntExtra(android.bluetooth.BluetoothAdapter.EXTRA_STATE, -1)}" else "")
-            if (i.action == android.bluetooth.BluetoothA2dp.ACTION_PLAYING_STATE_CHANGED && st == android.bluetooth.BluetoothA2dp.STATE_PLAYING) gatt.logAudio("play")
-        }
-    }
-
-    private val batteryTick = object : Runnable {
-        override fun run() {
-            if (k.ready) gatt.read(ComDex.BATTERY_SVC, ComDex.BATTERY_LVL)
-            ui.postDelayed(this, 3 * 60_000L)
-        }
-    }
 
     override fun onCreate(b: Bundle?) {
         Ui.applyTheme(this)
         themeAtCreate = Ui.themeMode(this)
         darkAtCreate = Ui.isDark(this)
         super.onCreate(b)
-        fileLog = FileLog(this)
-        @Suppress("DEPRECATION")
-        val kept = lastNonConfigurationInstance as? Kept
-        k = kept ?: Kept(GattClient(this, this))
-        gatt.listener = this
-        if (kept == null) {
-            // старі A/B-налаштування налагодження; GREEN тепер типовий режим
-            gatt.skipReboot = prefs.getBoolean("skipReboot", false)
-            gatt.noNotify = prefs.getBoolean("noNotify", false)
-            gatt.greenMode = prefs.getBoolean("greenMode", true)
-        }
-        val f = android.content.IntentFilter().apply {
-            addAction(android.bluetooth.BluetoothA2dp.ACTION_PLAYING_STATE_CHANGED)
-            addAction(android.bluetooth.BluetoothA2dp.ACTION_CONNECTION_STATE_CHANGED)
-            addAction(android.bluetooth.BluetoothHeadset.ACTION_CONNECTION_STATE_CHANGED)
-            addAction(android.bluetooth.BluetoothHeadset.ACTION_AUDIO_STATE_CHANGED)
-            addAction(android.bluetooth.BluetoothAdapter.ACTION_STATE_CHANGED)
-        }
-        if (Build.VERSION.SDK_INT >= 33) registerReceiver(btReceiver, f, RECEIVER_EXPORTED) else registerReceiver(btReceiver, f)
-        if (kept == null) log("=== ControlDex v${Ui.VERSION} запущено ===")
+        Core.init(this)
         title = "ControlDex"
         buildUi()
-        refreshInfo()
-        logView.text = k.logLines.reversed().joinToString("\n")
-        if (k.ready) ui.postDelayed(batteryTick, 3 * 60_000L)
+        Core.view = this
+        onChanged()
+        if (!Core.autoTried && !gatt.wantConnected && Ui.autoConnect(this) && prefs.getString(Ui.KEY_LAST_MAC, null) != null) {
+            // автопідключення до останнього COM-DEX; якщо бракує дозволів — спершу запит
+            if (missingPerms().isEmpty()) Core.autoConnect() else connect()
+        }
     }
 
     private fun buildUi() {
@@ -134,14 +86,14 @@ class MainActivity : Activity(), GattClient.Listener {
             setHomeActionContentDescription("Меню")
         }
 
-        status = TextView(this).apply { textSize = 18f; text = k.status }
+        status = TextView(this).apply { textSize = 18f }
         info = TextView(this)
         root.addView(status)
         root.addView(info)
 
         val row = LinearLayout(this)
         row.addView(btn("Підключитися") { connect() }, lp())
-        row.addView(btn("Відключитися") { gatt.disconnect() }, lp())
+        row.addView(btn("Відключитися") { Core.disconnect() }, lp())
         root.addView(row)
 
         val bat = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL; setPadding(0, 16, 0, 0) }
@@ -153,9 +105,13 @@ class MainActivity : Activity(), GattClient.Listener {
 
         root.addView(label("Гучність"))
         val vol = LinearLayout(this)
-        vol.addView(ctl("−") { volume(-1) }, lp())
-        vol.addView(ctl("+") { volume(+1) }, lp())
+        vol.addView(repeatCtl("−") { volume(-1) }, lp())
+        vol.addView(repeatCtl("+") { volume(+1) }, lp())
         root.addView(vol)
+
+        // Mute як в оригіналі: без трансляції — 22 × VOL_DOWN (блок на 5 с), unmute — VOL_UP
+        muteBtn = ctl("") { toggleMute() }.apply { setAllCaps(false) }
+        root.addView(muteBtn)
 
         // як кнопка room в оригіналі: мікрофони слухових апаратів під час трансляції
         micBtn = btn("") { toggleMic() }.apply { setAllCaps(false); compoundDrawablePadding = (8 * dp).toInt() }
@@ -163,26 +119,27 @@ class MainActivity : Activity(), GattClient.Listener {
 
         root.addView(label("Програма"))
         val prog = LinearLayout(this)
-        prog.addView(ctl("Наступна програма") { pi(ComDex.NEXT_PROG) }, lp())
+        prog.addView(ctl("Наступна програма") { k.progSwitches++; pi(ComDex.NEXT_PROG); onChanged() }, lp())
         prog.addView(ctl("Zen+") { pi(ComDex.ZEN_TOGGLE) }, lp())
         root.addView(prog)
+        progInfo = TextView(this).apply { textSize = 13f; alpha = 0.75f }
+        root.addView(progInfo)
 
         root.addView(label("Фокус"))
         val r1 = LinearLayout(this)
-        r1.addView(ctl("▲ Вперед") { focus(ComDex.FOCUS_FRONT) }, lp())
+        r1.addView(focusBtn("▲ Вперед", ComDex.FOCUS_FRONT), lp())
         val r2 = LinearLayout(this)
-        r2.addView(ctl("◀ Ліво") { focus(ComDex.FOCUS_LEFT) }, lp())
-        r2.addView(ctl("● Omni") { focus(ComDex.FOCUS_OMNI) }, lp())
-        r2.addView(ctl("Право ▶") { focus(ComDex.FOCUS_RIGHT) }, lp())
+        r2.addView(focusBtn("◀ Ліво", ComDex.FOCUS_LEFT), lp())
+        r2.addView(focusBtn("● Omni", ComDex.FOCUS_OMNI), lp())
+        r2.addView(focusBtn("Право ▶", ComDex.FOCUS_RIGHT), lp())
         val r3 = LinearLayout(this)
-        r3.addView(ctl("▼ Назад") { focus(ComDex.FOCUS_REAR) }, lp())
+        r3.addView(focusBtn("▼ Назад", ComDex.FOCUS_REAR), lp())
         root.addView(r1)
         root.addView(r2)
         root.addView(r3)
 
         boostSwitch = Switch(this).apply {
             text = "Boost COM-DEX media volume"
-            isChecked = k.boost == 2
             setOnCheckedChangeListener { _, on ->
                 if (!updatingBoost && k.ready) {
                     gatt.write(ComDex.BOOST, byteArrayOf(if (on) 2 else 0))
@@ -193,32 +150,24 @@ class MainActivity : Activity(), GattClient.Listener {
         controls += boostSwitch
         root.addView(boostSwitch)
 
-        // ---------- налагодження: усе від «Заїкається!» донизу ----------
-        debugPanel = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        // ---------- налагодження: усе від «Оновити стан» / «Заїкається!» донизу ----------
+        debugPanel = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(0, (12 * dp).toInt(), 0, 0) }
         root.addView(debugPanel)
-        debugPanel.addView(btn("⚠ Заїкається!") { log("=== MARK: заїкання звуку ===") })
-        debugPanel.addView(label("Тестові режими (діють з наступного «Підключитися»)"))
-        debugPanel.addView(check("Режим GREEN: GATT через класичний Bluetooth (BR/EDR)", "greenMode", true) { gatt.greenMode = it })
-        debugPanel.addView(check("Без нотифікацій (як nRF Connect)", "noNotify", false) { gatt.noNotify = it })
-        debugPanel.addView(check("Не слати BLE_Reb (WDXAPP:2), лише для BLE", "skipReboot", false) { gatt.skipReboot = it })
-        debugPanel.addView(btn("Оновити стан COM-DEX") { if (k.ready) gatt.refreshState() })
+        val dbgRow = LinearLayout(this)
+        dbgRow.addView(btn("Оновити стан COM-DEX") { if (k.ready) gatt.refreshState() }, lp())
+        dbgRow.addView(btn("⚠ Заїкається!") { Core.log("=== MARK: заїкання звуку ===") }, lp())
+        debugPanel.addView(dbgRow)
         val logRow = LinearLayout(this)
         logRow.addView(btn("Копіювати журнал") {
-            (getSystemService(CLIPBOARD_SERVICE) as ClipboardManager).setPrimaryClip(ClipData.newPlainText("log", fileLog.tail(200_000)))
+            (getSystemService(CLIPBOARD_SERVICE) as ClipboardManager).setPrimaryClip(ClipData.newPlainText("log", Core.fileLog.tail(200_000)))
         }, lp())
         logRow.addView(btn("Поділитися (zip)") { shareLog() }, lp())
         debugPanel.addView(logRow)
-        debugPanel.addView(TextView(this).apply { textSize = 11f; text = "Файл журналу: ${fileLog.file.absolutePath}" })
+        debugPanel.addView(TextView(this).apply { textSize = 11f; text = "Файл журналу: ${Core.fileLog.file.absolutePath}" })
         debugPanel.addView(label("Журнал"))
         logView = TextView(this).apply { textSize = 11f }
         debugPanel.addView(logView)
         applyDebug()
-    }
-
-    private fun check(text: String, key: String, def: Boolean, set: (Boolean) -> Unit) = android.widget.CheckBox(this).apply {
-        this.text = text
-        isChecked = prefs.getBoolean(key, def)
-        setOnCheckedChangeListener { _, on -> prefs.edit().putBoolean(key, on).apply(); set(on); log("Опція: $key = $on") }
     }
 
     private fun applyDebug() {
@@ -230,10 +179,10 @@ class MainActivity : Activity(), GattClient.Listener {
     override fun onResume() {
         super.onResume()
         if (Ui.themeMode(this) != themeAtCreate || Ui.isDark(this) != darkAtCreate) { recreate(); return }
+        Core.view = this
         applyDebug()
+        onChanged()
     }
-
-    override fun onRetainNonConfigurationInstance(): Any = k
 
     // ---------- меню ☰ ----------
     override fun onCreateOptionsMenu(menu: Menu): Boolean = true
@@ -258,41 +207,54 @@ class MainActivity : Activity(), GattClient.Listener {
     }
 
     // ---------- підключення ----------
+    private fun missingPerms(): List<String> {
+        val all = mutableListOf<String>()
+        if (Build.VERSION.SDK_INT >= 31) all += listOf(Manifest.permission.BLUETOOTH_CONNECT, Manifest.permission.BLUETOOTH_SCAN)
+        if (Build.VERSION.SDK_INT >= 33) all += Manifest.permission.POST_NOTIFICATIONS
+        return all.filter { checkSelfPermission(it) != PackageManager.PERMISSION_GRANTED }
+    }
+
     private fun connect() {
-        if (Build.VERSION.SDK_INT >= 31) {
-            val need = listOf(Manifest.permission.BLUETOOTH_CONNECT, Manifest.permission.BLUETOOTH_SCAN)
-                .filter { checkSelfPermission(it) != PackageManager.PERMISSION_GRANTED }
-            if (need.isNotEmpty()) { requestPermissions(need.toTypedArray(), 1); return }
-        }
+        val need = missingPerms()
+        if (need.isNotEmpty()) { requestPermissions(need.toTypedArray(), 1); return }
         val adapter = (getSystemService(BLUETOOTH_SERVICE) as BluetoothManager).adapter
         if (adapter == null || !adapter.isEnabled) {
-            onState("Увімкніть Bluetooth")
+            onStateText("Увімкніть Bluetooth")
             return
         }
         val devs = adapter.bondedDevices.filter { it.name?.contains("COM-DEX") == true }
         when {
             devs.isEmpty() -> {
-                onState("COM-DEX не спарено. Спаруйте в налаштуваннях Bluetooth (відкрийте й закрийте neck loop).")
+                onStateText("COM-DEX не спарено. Спаруйте в налаштуваннях Bluetooth (відкрийте й закрийте neck loop).")
                 startActivity(Intent(Settings.ACTION_BLUETOOTH_SETTINGS))
             }
             devs.size == 1 -> start(devs[0])
-            else -> AlertDialog.Builder(this).setTitle("Оберіть пристрій")
-                .setItems(devs.map { "${it.name} ${it.address}" }.toTypedArray()) { _, i -> start(devs[i]) }
-                .show()
+            else -> {
+                val last = prefs.getString(Ui.KEY_LAST_MAC, null)
+                AlertDialog.Builder(this).setTitle("Оберіть пристрій")
+                    .setItems(devs.map { "${it.name} ${it.address}${if (it.address == last) " (останній)" else ""}" }.toTypedArray()) { _, i -> start(devs[i]) }
+                    .show()
+            }
         }
     }
 
     private fun start(d: BluetoothDevice) {
-        log("connect ${d.name} ${d.address}")
-        gatt.connect(d)
+        Core.autoTried = true
+        k.focus = null
+        k.progSwitches = 0
+        Core.connect(d)
     }
 
     override fun onRequestPermissionsResult(code: Int, p: Array<out String>, r: IntArray) {
-        if (r.isNotEmpty() && r.all { it == PackageManager.PERMISSION_GRANTED }) connect() else onState("Потрібен дозвіл Bluetooth")
+        // сповіщення не обов'язкові: без них сервіс працює, лише сповіщення не видно
+        val bt = p.indices.filter { p[it] != Manifest.permission.POST_NOTIFICATIONS }.all { r.getOrNull(it) == PackageManager.PERMISSION_GRANTED }
+        if (bt) connect() else onStateText("Потрібен дозвіл Bluetooth")
     }
 
+    private fun onStateText(t: String) { k.status = t; status.text = t }
+
     private fun shareLog() {
-        val zip = fileLog.makeZip(cacheDir)
+        val zip = Core.fileLog.makeZip(cacheDir)
         if (zip == null) android.widget.Toast.makeText(this, "Не вдалося створити zip", android.widget.Toast.LENGTH_LONG).show()
         else {
             val uri = android.net.Uri.parse("content://ua.controldex.logs/${zip.name}")
@@ -312,12 +274,15 @@ class MainActivity : Activity(), GattClient.Listener {
     private fun focus(cmd: ByteArray) {
         pi(ComDex.ROOM_ON)
         pi(cmd)
+        k.focus = cmd
+        onChanged()
     }
 
     /** Як в оригіналі: Idle -> PI_COMMAND; A2DP -> гучність медіа; HFP -> гучність SCO. */
     private fun volume(dir: Int) {
         val am = getSystemService(AUDIO_SERVICE) as AudioManager
         val d = if (dir > 0) AudioManager.ADJUST_RAISE else AudioManager.ADJUST_LOWER
+        if (dir > 0 && k.muted) { k.muted = false; onChanged() }
         try {
             when (k.profile) {
                 3 -> am.adjustStreamVolume(AudioManager.STREAM_MUSIC, d, AudioManager.FLAG_SHOW_UI)
@@ -325,8 +290,32 @@ class MainActivity : Activity(), GattClient.Listener {
                 else -> pi(if (dir > 0) ComDex.VOL_UP else ComDex.VOL_DOWN)
             }
         } catch (e: Exception) {
-            log("volume: ${e.message}")
+            Core.log("volume: ${e.message}")
         }
+    }
+
+    /**
+     * Mute як в оригіналі: без трансляції — 22 × VOL_DOWN у слухові апарати (повтор заблоковано на 5 с),
+     * unmute — один VOL_UP; під час музики/дзвінка — гучність потоку телефону до нуля (setStreamSilent).
+     */
+    private fun toggleMute() {
+        if (!k.ready || muteLocked) return
+        val am = getSystemService(AUDIO_SERVICE) as AudioManager
+        val stream = when (k.profile) { 3 -> AudioManager.STREAM_MUSIC; 2 -> 6; else -> -1 }
+        if (!k.muted) {
+            Core.log("Mute (профіль ${k.profile})")
+            if (stream < 0) {
+                repeat(22) { pi(ComDex.VOL_DOWN) }
+                muteLocked = true
+                ui.postDelayed({ muteLocked = false; onChanged() }, 5000)
+            } else repeat(15) { am.adjustStreamVolume(stream, AudioManager.ADJUST_LOWER, AudioManager.FLAG_SHOW_UI) }
+            k.muted = true
+        } else {
+            Core.log("Unmute (профіль ${k.profile})")
+            if (stream < 0) pi(ComDex.VOL_UP) else am.adjustStreamVolume(stream, AudioManager.ADJUST_RAISE, AudioManager.FLAG_SHOW_UI)
+            k.muted = false
+        }
+        onChanged()
     }
 
     private fun streaming() = k.profile == 2 || k.profile == 3 || k.profile == 4
@@ -335,11 +324,11 @@ class MainActivity : Activity(), GattClient.Listener {
     private fun toggleMic() {
         if (!k.ready || !streaming()) return
         val on = k.mic == 0
-        log("Мікрофони слухових апаратів: ${if (on) "увімкнути" else "вимкнути"}")
+        Core.log("Мікрофони слухових апаратів: ${if (on) "увімкнути" else "вимкнути"}")
         gatt.write(ComDex.MIC_CTRL, byteArrayOf(if (on) ComDex.MIC_ON else ComDex.MIC_OFF))
         gatt.read(ComDex.SERVICE, ComDex.MIC_CTRL)
         k.mic = if (on) 1 else 0
-        refreshMic()
+        onChanged()
     }
 
     private fun refreshMic() {
@@ -353,43 +342,9 @@ class MainActivity : Activity(), GattClient.Listener {
         micBtn.isEnabled = k.ready && streaming() && k.charging == 0 && k.neckloop == 1
     }
 
-    // ---------- GattClient.Listener ----------
-    override fun onState(text: String) {
-        k.status = text
-        status.text = text
-        if (!gatt.connected) {
-            k.ready = false
-            refreshInfo()
-        }
-    }
-
-    override fun onReady() {
-        k.ready = true
-        log("READY")
-        refreshInfo()
-        ui.removeCallbacks(batteryTick)
-        ui.postDelayed(batteryTick, 3 * 60_000L)
-    }
-
-    override fun onValue(char: UUID, value: ByteArray) {
-        val v = value.firstOrNull()?.toInt()?.and(0xFF) ?: -1
-        when (char) {
-            ComDex.PROFILE -> k.profile = v
-            ComDex.MIC_CTRL -> k.mic = v
-            ComDex.CHARGING -> k.charging = v
-            ComDex.NECKLOOP -> k.neckloop = v
-            ComDex.BATTERY_LVL -> k.battery = v
-            ComDex.BOOST -> k.boost = v
-            ComDex.FW_REV -> k.fw = String(value)
-            ComDex.SERIAL -> k.serial = String(value)
-        }
-        log("${char.toString().takeLast(8)} = ${value.joinToString(" ") { "%02X".format(it) }}")
-        refreshInfo()
-    }
-
-    override fun onLog(line: String) = log(line)
-
-    private fun refreshInfo() {
+    // ---------- Core.View ----------
+    override fun onChanged() {
+        status.text = k.status
         info.text = "Профіль: ${ComDex.PROFILE_NAMES[k.profile] ?: k.profile}\n" +
             "Neck loop: ${if (k.neckloop == 1) "закрито (увімкнено)" else "відкрито (вимкнено)"}\n" +
             "Прошивка: ${k.fw}   Серійний №: ${k.serial}"
@@ -400,9 +355,32 @@ class MainActivity : Activity(), GattClient.Listener {
         boostSwitch.isChecked = k.boost == 2
         updatingBoost = false
         // як в оригіналі: при зарядці або відкритому neck loop — лише статус
-        setControlsEnabled(k.ready && k.charging == 0 && k.neckloop == 1)
+        val enabled = k.ready && k.charging == 0 && k.neckloop == 1
+        controls.forEach { it.isEnabled = enabled }
         if (k.fw != "?") boostSwitch.visibility = if (fwAtLeast(k.fw, "1.2.51")) View.VISIBLE else View.GONE
+        muteBtn.text = when {
+            muteLocked -> "🔇 Вимкнення звуку…"
+            k.muted -> "🔇 Звук вимкнено — увімкнути"
+            else -> "🔈 Вимкнути звук (Mute)"
+        }
+        muteBtn.isEnabled = enabled && !muteLocked
+        progInfo.text = (if (k.program >= 0) "Поточна програма (…70002): ${k.program}   " else "") +
+            "Перемикань за сеанс: ${k.progSwitches}"
+        val sel = ColorStateList.valueOf(0xFF64B5F6.toInt())
+        focusBtns.forEach { (cmd, b) -> b.backgroundTintList = if (k.focus.contentEquals(cmd)) sel else null }
         refreshMic()
+    }
+
+    override fun onLogLine(line: String) {
+        if (::logView.isInitialized && debugPanel.visibility == View.VISIBLE) logView.text = k.logLines.reversed().joinToString("\n")
+    }
+
+    override fun onAuthLost() {
+        AlertDialog.Builder(this).setTitle("Пару втрачено")
+            .setMessage("COM-DEX більше не спарений з телефоном. Спаруйте його заново в налаштуваннях Bluetooth (відкрийте й закрийте neck loop), потім натисніть «Підключитися».")
+            .setPositiveButton("Налаштування Bluetooth") { _, _ -> startActivity(Intent(Settings.ACTION_BLUETOOTH_SETTINGS)) }
+            .setNegativeButton("Закрити", null)
+            .show()
     }
 
     private fun fwAtLeast(v: String, min: String): Boolean {
@@ -413,32 +391,56 @@ class MainActivity : Activity(), GattClient.Listener {
     }
 
     // ---------- допоміжне ----------
-    private fun setControlsEnabled(on: Boolean) = controls.forEach { it.isEnabled = on }
     private fun label(t: String) = TextView(this).apply { text = t; textSize = 16f; setPadding(0, 24, 0, 4) }
     private fun lp() = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
-    private fun btn(t: String, a: () -> Unit) = Button(this).apply { text = t; setOnClickListener { a() } }
+    private fun btn(t: String, a: () -> Unit) = Button(this).apply {
+        text = t
+        setOnClickListener { performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY); a() }
+    }
     private fun ctl(t: String, a: () -> Unit) = btn(t, a).also { controls += it }
-    private fun log(s: String) {
-        val line = "${timeFmt.format(Date())} $s"
-        fileLog.add(line)
-        k.logLines.addLast(line)
-        while (k.logLines.size > 150) k.logLines.removeFirst()
-        if (::logView.isInitialized && debugPanel.visibility == View.VISIBLE) logView.text = k.logLines.reversed().joinToString("\n")
+    private fun focusBtn(t: String, cmd: ByteArray) = ctl(t) { focus(cmd) }.also { focusBtns += cmd to it }
+
+    /** Кнопка з авторепітом: одне спрацювання при натисканні, далі — кожні 250 мс, поки утримується. */
+    private fun repeatCtl(t: String, a: () -> Unit): Button {
+        val b = Button(this).apply { text = t; textSize = 22f }
+        val tick = object : Runnable {
+            override fun run() {
+                if (!b.isPressed || !b.isEnabled) return
+                b.performHapticFeedback(HapticFeedbackConstants.CLOCK_TICK)
+                a()
+                ui.postDelayed(this, 250)
+            }
+        }
+        b.setOnTouchListener { v, e ->
+            when (e.actionMasked) {
+                MotionEvent.ACTION_DOWN -> {
+                    v.isPressed = true
+                    v.performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY)
+                    a()
+                    ui.postDelayed(tick, 450)
+                }
+                MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                    v.isPressed = false
+                    ui.removeCallbacks(tick)
+                    if (e.actionMasked == MotionEvent.ACTION_UP) v.performClick()
+                }
+            }
+            true
+        }
+        controls += b
+        return b
     }
 
     override fun onStop() {
-        fileLog.flush()
+        Core.fileLog.flush()
         super.onStop()
     }
 
     override fun onDestroy() {
-        try { unregisterReceiver(btReceiver) } catch (_: Exception) {}
-        fileLog.flush()
-        ui.removeCallbacks(batteryTick)
-        if (!isChangingConfigurations) {
-            gatt.disconnect()
-            gatt.release()
-        }
+        if (Core.view === this) Core.view = null
+        ui.removeCallbacksAndMessages(null)
+        Core.fileLog.flush()
+        // з'єднання не рвемо: його тримає Core і foreground-сервіс; «Відключитися» — кнопкою або зі сповіщення
         super.onDestroy()
     }
 }

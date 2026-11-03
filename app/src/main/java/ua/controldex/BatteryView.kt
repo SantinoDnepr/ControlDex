@@ -6,7 +6,7 @@ import android.graphics.Paint
 import android.graphics.RectF
 import android.view.View
 
-/** Проста іконка батареї: рівень 0–100, -1 = невідомо. Кольори як в оригіналі: <=5 червоний, <=20 жовтий. */
+/** Проста іконка батареї: рівень 0–100, -1 = невідомо. Кольори: 0–15 % червоний, 16–30 % жовтий, 31–100 % зелений. */
 class BatteryView(ctx: Context) : View(ctx) {
     var level = -1
         set(v) { field = v; invalidate() }
@@ -29,7 +29,7 @@ class BatteryView(ctx: Context) : View(ctx) {
         p.style = Paint.Style.FILL
         c.drawRect(bw, height * 0.32f, width - 1 * d, height * 0.68f, p)
         if (level >= 0) {
-            p.color = when { level <= 5 -> 0xFFD32F2F.toInt(); level <= 20 -> 0xFFF9A825.toInt(); else -> 0xFF43A047.toInt() }
+            p.color = when { level <= 15 -> 0xFFD32F2F.toInt(); level <= 30 -> 0xFFF9A825.toInt(); else -> 0xFF43A047.toInt() }
             val inner = RectF(body.left + 3 * d, body.top + 3 * d, body.left + 3 * d + (body.width() - 6 * d) * level / 100f, body.bottom - 3 * d)
             c.drawRect(inner, p)
         }

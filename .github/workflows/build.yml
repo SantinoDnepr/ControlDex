@@ -14,8 +14,24 @@ jobs:
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: 8.7
+      - name: Keystore
+        shell: bash
+        env:
+          KS: ${{ secrets.KEYSTORE_BASE64 }}
+        run: |
+          if [ -n "$KS" ]; then
+            echo "$KS" | base64 -d > "$RUNNER_TEMP/controldex.jks"
+            echo "SIGNING_KEYSTORE=$RUNNER_TEMP/controldex.jks" >> "$GITHUB_ENV"
+            echo "Підпис стабільним ключем"
+          else
+            echo "::warning::Секрет KEYSTORE_BASE64 не задано — APK підписано тимчасовим debug-ключем"
+          fi
       - name: Build
         shell: bash
+        env:
+          SIGNING_STORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          SIGNING_KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          SIGNING_KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
         run: |
           set -o pipefail
           gradle assembleDebug --no-daemon 2>&1 | tee build.log || {
@@ -24,5 +40,5 @@ jobs:
           }
       - uses: actions/upload-artifact@v4
         with:
-          name: ControlDex-v0.6-build${{ github.run_number }}
+          name: ControlDex-v0.7-build${{ github.run_number }}
           path: app/build/outputs/apk/debug/*.apk
