@@ -94,7 +94,7 @@ class PageActivity : Activity() {
             isChecked = Ui.autoConnect(this@PageActivity)
             setOnCheckedChangeListener { _, on -> prefs.edit().putBoolean(Ui.KEY_AUTO, on).apply() }
         })
-        small("Під час запуску ControlDex підключається до останнього COM-DEX. Після втрати зв'язку застосунок перепідключається сам, доки ви не натиснете «Відключитися».")
+        small("Під час запуску ControlDex підключається до останнього COM-DEX. Після втрати зв'язку застосунок перепідключається сам, доки ви не натиснете «Від'єднатись».")
         head("Тема")
         val ids = mapOf(Ui.THEME_LIGHT to 101, Ui.THEME_DARK to 102, Ui.THEME_SYSTEM to 103)
         val group = RadioGroup(this)

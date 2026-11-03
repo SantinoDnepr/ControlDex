@@ -4,6 +4,7 @@ import android.Manifest
 import android.annotation.SuppressLint
 import android.app.Activity
 import android.app.AlertDialog
+import android.bluetooth.BluetoothAdapter
 import android.bluetooth.BluetoothDevice
 import android.bluetooth.BluetoothManager
 import android.content.ClipData
@@ -24,6 +25,7 @@ import android.view.MenuItem
 import android.view.MotionEvent
 import android.view.View
 import android.widget.Button
+import android.widget.Space
 import android.widget.FrameLayout
 import android.widget.LinearLayout
 import android.widget.PopupMenu
@@ -34,6 +36,11 @@ import android.widget.TextView
 @SuppressLint("MissingPermission", "SetTextI18n", "ClickableViewAccessibility")
 class MainActivity : Activity(), Core.View {
 
+    private companion object {
+        const val REQ_ENABLE_BT = 10
+        const val REQ_ENABLE_PERM = 11
+    }
+
     private val k = Core
     private val gatt get() = Core.gatt
     private lateinit var status: TextView
@@ -42,6 +49,7 @@ class MainActivity : Activity(), Core.View {
     private lateinit var batteryView: BatteryView
     private lateinit var batteryText: TextView
     private lateinit var micBtn: Button
+    private lateinit var connBtn: Button
     private lateinit var muteBtn: Button
     private lateinit var progInfo: TextView
     private lateinit var debugPanel: LinearLayout
@@ -57,6 +65,11 @@ class MainActivity : Activity(), Core.View {
     private var muteLocked = false
     private val dp by lazy { resources.displayMetrics.density }
 
+    /** Увімкнення/вимкнення Bluetooth міняє напис кнопки підключення навіть до першого підключення. */
+    private val btStateRx = object : android.content.BroadcastReceiver() {
+        override fun onReceive(c: android.content.Context, i: Intent) { onChanged() }
+    }
+
     override fun onCreate(b: Bundle?) {
         Ui.applyTheme(this)
         themeAtCreate = Ui.themeMode(this)
@@ -65,6 +78,8 @@ class MainActivity : Activity(), Core.View {
         Core.init(this)
         title = "ControlDex"
         buildUi()
+        val f = android.content.IntentFilter(BluetoothAdapter.ACTION_STATE_CHANGED)
+        if (Build.VERSION.SDK_INT >= 33) registerReceiver(btStateRx, f, RECEIVER_EXPORTED) else registerReceiver(btStateRx, f)
         Core.view = this
         onChanged()
         if (!Core.autoTried && !gatt.wantConnected && Ui.autoConnect(this) && prefs.getString(Ui.KEY_LAST_MAC, null) != null) {
@@ -91,10 +106,9 @@ class MainActivity : Activity(), Core.View {
         root.addView(status)
         root.addView(info)
 
-        val row = LinearLayout(this)
-        row.addView(btn("Підключитися") { connect() }, lp())
-        row.addView(btn("Відключитися") { Core.disconnect() }, lp())
-        root.addView(row)
+        // одна кнопка: «Увімкнути Bluetooth» / «Під'єднатись» / «Від'єднатись»
+        connBtn = btn("") { onConnButton() }
+        root.addView(connBtn)
 
         val bat = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL; setPadding(0, 16, 0, 0) }
         batteryView = BatteryView(this)
@@ -126,14 +140,19 @@ class MainActivity : Activity(), Core.View {
         root.addView(progInfo)
 
         root.addView(label("Фокус"))
+        // сітка 3 × 3: усі кнопки однакової ширини, «Вперед» і «Назад» — по центру
         val r1 = LinearLayout(this)
+        r1.addView(Space(this), lp())
         r1.addView(focusBtn("▲ Вперед", ComDex.FOCUS_FRONT), lp())
+        r1.addView(Space(this), lp())
         val r2 = LinearLayout(this)
         r2.addView(focusBtn("◀ Ліво", ComDex.FOCUS_LEFT), lp())
         r2.addView(focusBtn("● Omni", ComDex.FOCUS_OMNI), lp())
         r2.addView(focusBtn("Право ▶", ComDex.FOCUS_RIGHT), lp())
         val r3 = LinearLayout(this)
+        r3.addView(Space(this), lp())
         r3.addView(focusBtn("▼ Назад", ComDex.FOCUS_REAR), lp())
+        r3.addView(Space(this), lp())
         root.addView(r1)
         root.addView(r2)
         root.addView(r3)
@@ -207,6 +226,44 @@ class MainActivity : Activity(), Core.View {
     }
 
     // ---------- підключення ----------
+    private fun btAdapter(): BluetoothAdapter? = (getSystemService(BLUETOOTH_SERVICE) as BluetoothManager).adapter
+    private fun btOn() = btAdapter()?.isEnabled == true
+    private fun linked() = gatt.wantConnected || gatt.connected
+
+    private fun onConnButton() = when {
+        !btOn() -> enableBt()
+        linked() -> Core.disconnect()
+        else -> connect()
+    }
+
+    private fun refreshConnBtn() {
+        connBtn.text = when {
+            btAdapter() == null -> "Bluetooth недоступний"
+            !btOn() -> "Увімкнути Bluetooth"
+            linked() -> "Від'єднатись"
+            else -> "Під'єднатись"
+        }
+        connBtn.isEnabled = btAdapter() != null
+    }
+
+    /** Системний діалог увімкнення Bluetooth (на Android 12+ потрібен дозвіл BLUETOOTH_CONNECT). */
+    private fun enableBt() {
+        if (Build.VERSION.SDK_INT >= 31 && checkSelfPermission(Manifest.permission.BLUETOOTH_CONNECT) != PackageManager.PERMISSION_GRANTED) {
+            requestPermissions(arrayOf(Manifest.permission.BLUETOOTH_CONNECT), REQ_ENABLE_PERM); return
+        }
+        try {
+            startActivityForResult(Intent(BluetoothAdapter.ACTION_REQUEST_ENABLE), REQ_ENABLE_BT)
+        } catch (e: Exception) {
+            Core.log("Увімкнення Bluetooth: ${e.message}")
+            startActivity(Intent(Settings.ACTION_BLUETOOTH_SETTINGS))
+        }
+    }
+
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        super.onActivityResult(requestCode, resultCode, data)
+        if (requestCode == REQ_ENABLE_BT) onChanged()
+    }
+
     private fun missingPerms(): List<String> {
         val all = mutableListOf<String>()
         if (Build.VERSION.SDK_INT >= 31) all += listOf(Manifest.permission.BLUETOOTH_CONNECT, Manifest.permission.BLUETOOTH_SCAN)
@@ -246,6 +303,10 @@ class MainActivity : Activity(), Core.View {
     }
 
     override fun onRequestPermissionsResult(code: Int, p: Array<out String>, r: IntArray) {
+        if (code == REQ_ENABLE_PERM) {
+            if (r.firstOrNull() == PackageManager.PERMISSION_GRANTED) enableBt() else onStateText("Потрібен дозвіл Bluetooth")
+            return
+        }
         // сповіщення не обов'язкові: без них сервіс працює, лише сповіщення не видно
         val bt = p.indices.filter { p[it] != Manifest.permission.POST_NOTIFICATIONS }.all { r.getOrNull(it) == PackageManager.PERMISSION_GRANTED }
         if (bt) connect() else onStateText("Потрібен дозвіл Bluetooth")
@@ -366,8 +427,8 @@ class MainActivity : Activity(), Core.View {
         muteBtn.isEnabled = enabled && !muteLocked
         progInfo.text = (if (k.program >= 0) "Поточна програма (…70002): ${k.program}   " else "") +
             "Перемикань за сеанс: ${k.progSwitches}"
-        val sel = ColorStateList.valueOf(0xFF64B5F6.toInt())
-        focusBtns.forEach { (cmd, b) -> b.backgroundTintList = if (k.focus.contentEquals(cmd)) sel else null }
+        focusBtns.forEach { (cmd, b) -> b.backgroundTintList = focusTint(k.focus.contentEquals(cmd)) }
+        refreshConnBtn()
         refreshMic()
     }
 
@@ -377,10 +438,23 @@ class MainActivity : Activity(), Core.View {
 
     override fun onAuthLost() {
         AlertDialog.Builder(this).setTitle("Пару втрачено")
-            .setMessage("COM-DEX більше не спарений з телефоном. Спаруйте його заново в налаштуваннях Bluetooth (відкрийте й закрийте neck loop), потім натисніть «Підключитися».")
+            .setMessage("COM-DEX більше не спарений з телефоном. Спаруйте його заново в налаштуваннях Bluetooth (відкрийте й закрийте neck loop), потім натисніть «Під'єднатись».")
             .setPositiveButton("Налаштування Bluetooth") { _, _ -> startActivity(Intent(Settings.ACTION_BLUETOOTH_SETTINGS)) }
             .setNegativeButton("Закрити", null)
             .show()
+    }
+
+    /** Фон кнопок фокусу: світла тема — світло-блакитний / обраний світло-зелений; темна — темно-синій / темно-зелений. */
+    private fun focusTint(selected: Boolean): ColorStateList {
+        val dark = Ui.isDark(this)
+        val c = when {
+            dark && selected -> 0xFF1B5E20.toInt()
+            dark -> 0xFF0D2A5C.toInt()
+            selected -> 0xFFB9F6CA.toInt()
+            else -> 0xFFB3E5FC.toInt()
+        }
+        val disabled = (c and 0x00FFFFFF) or 0x66000000
+        return ColorStateList(arrayOf(intArrayOf(-android.R.attr.state_enabled), intArrayOf()), intArrayOf(disabled, c))
     }
 
     private fun fwAtLeast(v: String, min: String): Boolean {
@@ -437,10 +511,11 @@ class MainActivity : Activity(), Core.View {
     }
 
     override fun onDestroy() {
+        try { unregisterReceiver(btStateRx) } catch (_: Exception) {}
         if (Core.view === this) Core.view = null
         ui.removeCallbacksAndMessages(null)
         Core.fileLog.flush()
-        // з'єднання не рвемо: його тримає Core і foreground-сервіс; «Відключитися» — кнопкою або зі сповіщення
+        // з'єднання не рвемо: його тримає Core і foreground-сервіс; «Від'єднатись» — кнопкою або зі сповіщення
         super.onDestroy()
     }
 }

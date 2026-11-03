@@ -45,7 +45,7 @@ class GattClient(context: Context, var listener: Listener) {
         private set
     /** Режим GREEN оригіналу: GATT через класичний Bluetooth (BR/EDR), без окремого BLE-каналу. */
     var greenMode = true
-    /** Користувач хоче бути підключеним: після втрати зв'язку перепідключаємось, доки не натиснуто «Відключитися». */
+    /** Користувач хоче бути підключеним: після втрати зв'язку перепідключаємось, доки не натиснуто «Від'єднатись». */
     var wantConnected = false
         private set
     var target: BluetoothDevice? = null

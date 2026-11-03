@@ -58,7 +58,7 @@ class ComDexService : Service() {
                 .setContentIntent(open)
                 .setOngoing(true)
                 .setOnlyAlertOnce(true)
-                .addAction(Notification.Action.Builder(null as android.graphics.drawable.Icon?, "Відключитися", stop).build())
+                .addAction(Notification.Action.Builder(null as android.graphics.drawable.Icon?, "Від'єднатись", stop).build())
                 .build()
         }
     }
