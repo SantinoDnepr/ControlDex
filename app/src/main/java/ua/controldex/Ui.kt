@@ -16,7 +16,7 @@ object Ui {
     const val THEME_DARK = 1
     const val THEME_SYSTEM = 2
 
-    const val VERSION = "0.8"
+    const val VERSION = "0.9"
 
     fun prefs(c: Context) = c.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
     fun themeMode(c: Context) = prefs(c).getInt(KEY_THEME, THEME_SYSTEM)

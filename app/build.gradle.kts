@@ -10,8 +10,8 @@ android {
         applicationId = "ua.controldex"
         minSdk = 26
         targetSdk = 34
-        versionCode = 8
-        versionName = "0.8"
+        versionCode = 9
+        versionName = "0.9"
     }
     // Стабільний підпис: keystore з GitHub Secrets (див. .github/workflows/build.yml).
     // Без змінних середовища — звичайний debug-ключ (локальна збірка).

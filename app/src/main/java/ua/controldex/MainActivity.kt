@@ -4,9 +4,12 @@ import android.Manifest
 import android.annotation.SuppressLint
 import android.app.Activity
 import android.app.AlertDialog
+import android.bluetooth.BluetoothA2dp
 import android.bluetooth.BluetoothAdapter
 import android.bluetooth.BluetoothDevice
+import android.bluetooth.BluetoothHeadset
 import android.bluetooth.BluetoothManager
+import android.bluetooth.BluetoothProfile
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Intent
@@ -65,9 +68,16 @@ class MainActivity : Activity(), Core.View {
     private var muteLocked = false
     private val dp by lazy { resources.displayMetrics.density }
 
-    /** Увімкнення/вимкнення Bluetooth міняє напис кнопки підключення навіть до першого підключення. */
+    /** Проксі A2DP/HFP: чи під'єднаний сам COM-DEX до телефона як аудіопристрій. */
+    private var a2dpProxy: BluetoothA2dp? = null
+    private var hfpProxy: BluetoothHeadset? = null
+
+    /** Увімкнення/вимкнення Bluetooth і під'єднання/від'єднання COM-DEX (A2DP/HFP) міняють напис кнопки підключення. */
     private val btStateRx = object : android.content.BroadcastReceiver() {
-        override fun onReceive(c: android.content.Context, i: Intent) { onChanged() }
+        override fun onReceive(c: android.content.Context, i: Intent) {
+            if (i.action == BluetoothAdapter.ACTION_STATE_CHANGED && btOn()) openAudioProxies()
+            onChanged()
+        }
     }
 
     override fun onCreate(b: Bundle?) {
@@ -78,7 +88,11 @@ class MainActivity : Activity(), Core.View {
         Core.init(this)
         title = "ControlDex"
         buildUi()
-        val f = android.content.IntentFilter(BluetoothAdapter.ACTION_STATE_CHANGED)
+        val f = android.content.IntentFilter(BluetoothAdapter.ACTION_STATE_CHANGED).apply {
+            addAction(BluetoothA2dp.ACTION_CONNECTION_STATE_CHANGED)
+            addAction(BluetoothHeadset.ACTION_CONNECTION_STATE_CHANGED)
+        }
+        openAudioProxies()
         if (Build.VERSION.SDK_INT >= 33) registerReceiver(btStateRx, f, RECEIVER_EXPORTED) else registerReceiver(btStateRx, f)
         Core.view = this
         onChanged()
@@ -106,7 +120,7 @@ class MainActivity : Activity(), Core.View {
         root.addView(status)
         root.addView(info)
 
-        // одна кнопка: «Увімкнути Bluetooth» / «Під'єднатись» / «Від'єднатись»
+        // одна кнопка: «Увімкнути Bluetooth» / «Підключити Com-dex» / «Під'єднатись» / «Від'єднатись»
         connBtn = btn("") { onConnButton() }
         root.addView(connBtn)
 
@@ -230,20 +244,102 @@ class MainActivity : Activity(), Core.View {
     private fun btOn() = btAdapter()?.isEnabled == true
     private fun linked() = gatt.wantConnected || gatt.connected
 
-    private fun onConnButton() = when {
-        !btOn() -> enableBt()
-        linked() -> Core.disconnect()
-        else -> connect()
+    /** Режими кнопки підключення. */
+    private enum class ConnMode(val title: String) {
+        NO_BT("Bluetooth недоступний"),
+        BT_OFF("Увімкнути Bluetooth"),
+        ATTACH_DEVICE("Підключити Com-dex"),
+        CONNECT("Під'єднатись"),
+        DISCONNECT("Від'єднатись"),
+    }
+
+    /**
+     * Порядок важливий: «Підключити Com-dex» — коли Bluetooth увімкнено, але сам COM-DEX не під'єднаний
+     * до телефона як аудіопристрій (A2DP/HFP), тож звук іде через динамік смартфона.
+     */
+    private fun connMode() = when {
+        btAdapter() == null -> ConnMode.NO_BT
+        !btOn() -> ConnMode.BT_OFF
+        gatt.connected -> ConnMode.DISCONNECT
+        comdexAudio() == false -> ConnMode.ATTACH_DEVICE
+        linked() -> ConnMode.DISCONNECT
+        else -> ConnMode.CONNECT
+    }
+
+    private fun onConnButton() = when (connMode()) {
+        ConnMode.NO_BT -> Unit
+        ConnMode.BT_OFF -> enableBt()
+        ConnMode.ATTACH_DEVICE -> attachDeviceDialog()
+        ConnMode.DISCONNECT -> Core.disconnect()
+        ConnMode.CONNECT -> connect()
     }
 
     private fun refreshConnBtn() {
-        connBtn.text = when {
-            btAdapter() == null -> "Bluetooth недоступний"
-            !btOn() -> "Увімкнути Bluetooth"
-            linked() -> "Від'єднатись"
-            else -> "Під'єднатись"
+        val m = connMode()
+        connBtn.text = m.title
+        connBtn.isEnabled = m != ConnMode.NO_BT
+    }
+
+    private fun openAudioProxies() {
+        val a = btAdapter() ?: return
+        val l = object : BluetoothProfile.ServiceListener {
+            override fun onServiceConnected(profile: Int, proxy: BluetoothProfile) {
+                if (profile == BluetoothProfile.A2DP) a2dpProxy = proxy as BluetoothA2dp
+                if (profile == BluetoothProfile.HEADSET) hfpProxy = proxy as BluetoothHeadset
+                if (!isDestroyed) onChanged()
+            }
+            override fun onServiceDisconnected(profile: Int) {
+                if (profile == BluetoothProfile.A2DP) a2dpProxy = null
+                if (profile == BluetoothProfile.HEADSET) hfpProxy = null
+                if (!isDestroyed) onChanged()
+            }
         }
-        connBtn.isEnabled = btAdapter() != null
+        try {
+            if (a2dpProxy == null) a.getProfileProxy(this, l, BluetoothProfile.A2DP)
+            if (hfpProxy == null) a.getProfileProxy(this, l, BluetoothProfile.HEADSET)
+        } catch (e: Exception) { Core.log("A2DP/HFP-проксі екрана: ${e.message}") }
+    }
+
+    private fun closeAudioProxies() {
+        val a = btAdapter() ?: return
+        try {
+            a2dpProxy?.let { a.closeProfileProxy(BluetoothProfile.A2DP, it) }
+            hfpProxy?.let { a.closeProfileProxy(BluetoothProfile.HEADSET, it) }
+        } catch (_: Exception) {}
+        a2dpProxy = null; hfpProxy = null
+    }
+
+    /**
+     * Чи під'єднаний спарений COM-DEX до телефона як аудіопристрій (A2DP або HFP).
+     * null — невідомо (немає дозволу, проксі ще не готові або COM-DEX не спарено): тоді режим «Підключити Com-dex» не показуємо.
+     */
+    private fun comdexAudio(): Boolean? {
+        if (Build.VERSION.SDK_INT >= 31 && checkSelfPermission(Manifest.permission.BLUETOOTH_CONNECT) != PackageManager.PERMISSION_GRANTED) return null
+        val a2 = a2dpProxy
+        val hf = hfpProxy
+        if (a2 == null && hf == null) return null
+        val devs = try { btAdapter()?.bondedDevices?.filter { it.name?.contains("COM-DEX") == true } } catch (_: Exception) { null }
+        if (devs.isNullOrEmpty()) return null
+        return devs.any { d ->
+            val s1 = try { a2?.getConnectionState(d) } catch (_: Exception) { null }
+            val s2 = try { hf?.getConnectionState(d) } catch (_: Exception) { null }
+            s1 == BluetoothProfile.STATE_CONNECTED || s2 == BluetoothProfile.STATE_CONNECTED
+        }
+    }
+
+    /** COM-DEX вимкнений або не під'єднаний до телефона: підказка і перехід у налаштування Bluetooth. */
+    private fun attachDeviceDialog() {
+        val b = AlertDialog.Builder(this).setTitle("Підключіть COM-DEX")
+            .setMessage("Bluetooth увімкнено, але COM-DEX не під'єднаний до телефона, тому звук іде через динамік смартфона.\n\n" +
+                "Увімкніть COM-DEX: закрийте neck loop і зачекайте кілька секунд. Якщо він не під'єднається сам, " +
+                "виберіть COM-DEX у налаштуваннях Bluetooth.\n\n" +
+                if (linked()) "Коли COM-DEX під'єднається, ControlDex підключиться до нього сам."
+                else "Коли COM-DEX під'єднається, кнопка зміниться на «Під'єднатись».")
+            .setPositiveButton("Налаштування Bluetooth") { _, _ -> startActivity(Intent(Settings.ACTION_BLUETOOTH_SETTINGS)) }
+            .setNegativeButton("Закрити", null)
+        // якщо застосунок уже чекає на COM-DEX (перепідключення) — дати змогу це зупинити
+        if (linked()) b.setNeutralButton("Від'єднатись") { _, _ -> Core.disconnect() }
+        b.show()
     }
 
     /** Системний діалог увімкнення Bluetooth (на Android 12+ потрібен дозвіл BLUETOOTH_CONNECT). */
@@ -405,7 +501,9 @@ class MainActivity : Activity(), Core.View {
 
     // ---------- Core.View ----------
     override fun onChanged() {
-        status.text = k.status
+        status.text = if (connMode() == ConnMode.ATTACH_DEVICE)
+            "COM-DEX не під'єднаний до телефона — звук іде через динамік смартфона" + (if (linked()) "\n${k.status}" else "")
+        else k.status
         info.text = "Профіль: ${ComDex.PROFILE_NAMES[k.profile] ?: k.profile}\n" +
             "Neck loop: ${if (k.neckloop == 1) "закрито (увімкнено)" else "відкрито (вимкнено)"}\n" +
             "Прошивка: ${k.fw}   Серійний №: ${k.serial}"
@@ -444,16 +542,23 @@ class MainActivity : Activity(), Core.View {
             .show()
     }
 
-    /** Фон кнопок фокусу: світла тема — світло-блакитний / обраний світло-зелений; темна — темно-синій / темно-зелений. */
+    /** Звичайний фон кнопок теми (colorButtonNormal) — у темній темі сірий, як у решти кнопок. */
+    private val buttonNormal by lazy {
+        val a = obtainStyledAttributes(intArrayOf(android.R.attr.colorButtonNormal))
+        try { a.getColor(0, 0xFF5A595B.toInt()) } finally { a.recycle() }
+    }
+
+    /** Фон кнопок фокусу: світла тема — білий / обраний світло-зелений; темна — сірий як решта кнопок / обраний темно-зелений. */
     private fun focusTint(selected: Boolean): ColorStateList {
         val dark = Ui.isDark(this)
         val c = when {
             dark && selected -> 0xFF1B5E20.toInt()
-            dark -> 0xFF0D2A5C.toInt()
+            dark -> buttonNormal
             selected -> 0xFFB9F6CA.toInt()
-            else -> 0xFFB3E5FC.toInt()
+            else -> 0xFFFFFFFF.toInt()
         }
-        val disabled = (c and 0x00FFFFFF) or 0x66000000
+        // вимкнений стан — приглушений (напівпрозорий) той самий колір; білий на білому тлі не видно, тож світло-сірий
+        val disabled = if (!dark && !selected) 0xFFEEEEEE.toInt() else (c and 0x00FFFFFF) or 0x66000000
         return ColorStateList(arrayOf(intArrayOf(-android.R.attr.state_enabled), intArrayOf()), intArrayOf(disabled, c))
     }
 
@@ -512,6 +617,7 @@ class MainActivity : Activity(), Core.View {
 
     override fun onDestroy() {
         try { unregisterReceiver(btStateRx) } catch (_: Exception) {}
+        closeAudioProxies()
         if (Core.view === this) Core.view = null
         ui.removeCallbacksAndMessages(null)
         Core.fileLog.flush()
