@@ -57,7 +57,9 @@ class PageActivity : Activity() {
         title = "Про програму"
         root.addView(TextView(this).apply {
             text = "ControlDex"; textSize = 26f; setTypeface(typeface, Typeface.BOLD)
-            setCompoundDrawablesRelativeWithIntrinsicBounds(R.drawable.ic_info, 0, 0, 0); compoundDrawablePadding = px(10)
+            val ic = getDrawable(R.mipmap.ic_launcher)!!.apply { setBounds(0, 0, px(48), px(48)) }
+            setCompoundDrawablesRelative(ic, null, null, null); compoundDrawablePadding = px(12)
+            gravity = android.view.Gravity.CENTER_VERTICAL
         })
         para("Версія ${Ui.VERSION}")
         head("Що це")

@@ -24,7 +24,7 @@ jobs:
             echo "SIGNING_KEYSTORE=$RUNNER_TEMP/controldex.jks" >> "$GITHUB_ENV"
             echo "Підпис стабільним ключем"
           else
-            echo "::warning::Секрет KEYSTORE_BASE64 не задано — APK підписано тимчасовим debug-ключем"
+            echo "::warning::Секрет KEYSTORE_BASE64 не задано — релізний APK підписано тимчасовим debug-ключем"
           fi
       - name: Build
         shell: bash
@@ -34,11 +34,11 @@ jobs:
           SIGNING_KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
         run: |
           set -o pipefail
-          gradle assembleDebug --no-daemon 2>&1 | tee build.log || {
+          gradle assembleRelease --no-daemon 2>&1 | tee build.log || {
             grep -E '^e: |error:|What went wrong|Execution failed' -A2 build.log | head -40 | while IFS= read -r l; do echo "::error::$l"; done
             exit 1
           }
       - uses: actions/upload-artifact@v4
         with:
-          name: ControlDex-v0.9-build${{ github.run_number }}
-          path: app/build/outputs/apk/debug/*.apk
+          name: ControlDex-v0.9-release-build${{ github.run_number }}
+          path: app/build/outputs/apk/release/ControlDex.apk

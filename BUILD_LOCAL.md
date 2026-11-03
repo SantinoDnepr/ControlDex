@@ -34,9 +34,9 @@ winget install Gradle.Gradle
 ```powershell
 cd D:\Coding\Android\Com-dex\ControlDex
 "sdk.dir=D:/Android/Sdk" | Out-File -Encoding ascii local.properties
-gradle assembleDebug
+gradle assembleRelease
 ```
-APK: `app\build\outputs\apk\debug\app-debug.apk`. Перша збірка довга (завантаження залежностей).
+APK: `app\build\outputs\apk\release\ControlDex.apk` (іконка — `res/mipmap-*/ic_launcher.png`, джерела в `..\icons`). Перша збірка довга (завантаження залежностей).
 
 ## 5. Встановлення на Redmi 10 (Android 12, MIUI)
 1. Налаштування → Про телефон → 7 разів торкнутися «Версія MIUI».
@@ -44,7 +44,7 @@ APK: `app\build\outputs\apk\debug\app-debug.apk`. Перша збірка дов
 3. Підключити кабелем, підтвердити довіру ПК на телефоні, потім:
 ```powershell
 adb devices
-adb install -r app\build\outputs\apk\debug\app-debug.apk
+adb install -r app\build\outputs\apk\release\ControlDex.apk
 ```
 4. Журнал для діагностики: `adb logcat | Select-String -Pattern "ControlDex|Bluetooth"`.
 

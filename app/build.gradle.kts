@@ -26,7 +26,21 @@ android {
     }
     buildTypes {
         getByName("debug") { if (ks != null) signingConfig = signingConfigs.getByName("stable") }
+        // Релізна збірка: тим самим стабільним ключем (оновлення поверх попередніх версій),
+        // локально без ключа — debug-ключем, щоб APK можна було встановити.
+        getByName("release") {
+            isMinifyEnabled = false
+            signingConfig = if (ks != null) signingConfigs.getByName("stable") else signingConfigs.getByName("debug")
+        }
     }
+    // Ім'я вихідного файлу: ControlDex.apk (замість app-debug.apk / app-release.apk)
+    applicationVariants.all {
+        outputs.all {
+            (this as com.android.build.gradle.internal.api.BaseVariantOutputImpl).outputFileName = "ControlDex.apk"
+        }
+    }
+    // lintVital у release не запускаємо (як і для debug) — щоб CI не падав на попередженнях
+    lint { checkReleaseBuilds = false }
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
