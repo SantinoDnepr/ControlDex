@@ -12,8 +12,9 @@ import android.os.Build
 import android.os.IBinder
 
 /**
- * Foreground-сервіс (тип connectedDevice) зі сповіщенням: поки COM-DEX має бути підключений,
- * MIUI та інші оболонки не вбивають процес при згорнутому застосунку або вимкненому екрані.
+ * Foreground-сервіс (тип connectedDevice) зі сповіщенням: MIUI та інші оболонки не вбивають процес
+ * при згорнутому застосунку або вимкненому екрані. Вмикається лише кнопкою «Під'єднатись»,
+ * вимикається кнопкою «Від'єднатись» (на екрані або в сповіщенні) чи коли з'єднання остаточно втрачено.
  * Саме з'єднання живе в Core; сервіс лише тримає процес і показує стан.
  */
 class ComDexService : Service() {
@@ -23,8 +24,11 @@ class ComDexService : Service() {
         private const val ID = 1
         private const val ACTION_STOP = "ua.controldex.STOP"
         @Volatile private var running = false
+        /** Чи потрібна зараз робота у фоні: start() вмикає, stop() вимикає (навіть якщо сервіс ще стартує). */
+        @Volatile private var wanted = false
 
         fun start(c: Context) {
+            wanted = true
             val i = Intent(c, ComDexService::class.java)
             try {
                 if (Build.VERSION.SDK_INT >= 26) c.startForegroundService(i) else c.startService(i)
@@ -34,6 +38,8 @@ class ComDexService : Service() {
         }
 
         fun stop(c: Context) {
+            wanted = false
+            // якщо сервіс ще не дійшов до onStartCommand — він сам зупиниться там, побачивши wanted == false
             if (running) c.stopService(Intent(c, ComDexService::class.java))
         }
 
@@ -90,16 +96,22 @@ class ComDexService : Service() {
             stopSelf()
             return START_NOT_STICKY
         }
-        // intent == null: система перезапустила вбитий процес — підключаємось до останнього COM-DEX
-        if (intent == null && !Core.gatt.wantConnected) {
+        if (intent == null) {
+            // система перезапустила вбитий процес, коли працювала фонова робота — відновлюємо з'єднання
             Core.log("Сервіс перезапущено системою")
-            if (!Core.autoConnect()) { stopSelf(); return START_NOT_STICKY }
+            wanted = true
+            if (!Core.restoreBackground()) { wanted = false; stopSelf(); return START_NOT_STICKY }
+        } else if (!wanted) {
+            // «Від'єднатись» натиснули раніше, ніж сервіс встиг стартувати
+            stopSelf()
+            return START_NOT_STICKY
         }
         return START_STICKY
     }
 
     override fun onDestroy() {
         running = false
+        // wanted тут не скидаємо: «Від'єднатись» → «Під'єднатись» поспіль дає onDestroy старого екземпляра вже після нового start()
         super.onDestroy()
     }
 }

@@ -395,7 +395,7 @@ class MainActivity : Activity(), Core.View {
         Core.autoTried = true
         k.focus = null
         k.progSwitches = 0
-        Core.connect(d)
+        Core.connect(d, background = true)
     }
 
     override fun onRequestPermissionsResult(code: Int, p: Array<out String>, r: IntArray) {
@@ -621,7 +621,7 @@ class MainActivity : Activity(), Core.View {
         if (Core.view === this) Core.view = null
         ui.removeCallbacksAndMessages(null)
         Core.fileLog.flush()
-        // з'єднання не рвемо: його тримає Core і foreground-сервіс; «Від'єднатись» — кнопкою або зі сповіщення
+        // з'єднання не рвемо: його тримає Core (після «Під'єднатись» — ще й foreground-сервіс); «Від'єднатись» — кнопкою або зі сповіщення
         super.onDestroy()
     }
 }

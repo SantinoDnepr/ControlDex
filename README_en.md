@@ -23,7 +23,7 @@ Current version: **0.9** (`versionCode 9`), package `ua.controldex`, Android 8.0
 - **Boost COM-DEX media volume** (requires COM-DEX firmware ≥ 1.2.51).
 - **Hearing aid microphones** during streaming (call, music, Remote Mic): on / off.
 - **Status**: COM-DEX battery and charging, neck loop, current profile (Idle / call / music / Remote Mic), firmware, serial number.
-- **Background operation**: a foreground service with a persistent notification (with a «Від'єднатись» / Disconnect button), auto-connect to the last COM-DEX on launch, and automatic reconnection after the link is lost.
+- **Background operation**: a foreground service with a status-bar notification, started by the «Під'єднатись» / Connect button and stopped by «Від'єднатись» / Disconnect (also available in the notification itself). Auto-connect to the last COM-DEX on launch (without background operation or notification) and automatic reconnection after the link is lost.
 - **Green mode** (default): GATT over the existing Classic Bluetooth (BR/EDR) connection, like the original app's hidden mode for "problematic" phones. Eliminates audio stuttering when music starts on Redmi and similar phones.
 - **Themes**: light, dark, system.
 - **Built-in help** (texts taken from the original app) and an «Про програму» (About) screen.
@@ -68,7 +68,7 @@ and open questions is in the specification `../TZ_COM-DEX.md` (in Russian).
 | `ComDex.kt` | COM-DEX GATT profile: characteristic UUIDs and `PI_COMMAND` frames |
 | `GattClient.kt` | Connection (BLE and Green/BR/EDR), GATT operation queue, notifications, reconnection, watchdog |
 | `Core.kt` | Process-lifetime app state: GATT client, latest values, log, auto-connect |
-| `ComDexService.kt` | Foreground service (`connectedDevice`) with a notification; keeps the system from killing the process |
+| `ComDexService.kt` | Foreground service (`connectedDevice`) with a notification; keeps the system from killing the process; runs from Connect to Disconnect |
 | `MainActivity.kt` | Main screen: connection, volume, programs, focus, Boost, microphones, status, debug panel |
 | `PageActivity.kt` | «Про програму» (About), «Налаштування» (Settings), «Довідка» (Help) screens |
 | `HelpTexts.kt` | Help texts |
@@ -112,7 +112,8 @@ To sign locally with the same key as CI, set the environment variables `SIGNING_
 ## First launch
 
 1. Pair the COM-DEX in the system Bluetooth settings: open and close the neck loop, then select the device named `COM-DEX`.
-2. Launch ControlDex, tap «Під'єднатись» (Connect) and grant the "Nearby devices" permission.
+2. Launch ControlDex, tap «Під'єднатись» (Connect) and grant the "Nearby devices" permission. A notification appears in the
+   status bar — that is background operation; «Від'єднатись» (Disconnect) stops it and removes the notification.
 3. On Xiaomi/Redmi (MIUI), in the app's «Налаштування» (Settings), disable battery optimization and enable autostart —
    otherwise the system may drop the connection in the background.
 

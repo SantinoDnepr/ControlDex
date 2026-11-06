@@ -17,6 +17,7 @@ import java.util.UUID
  * Стан застосунку на весь час життя процесу: GATT-клієнт, останні значення COM-DEX і журнал.
  * Екран лише показує цей стан, тож закриття/перестворення Activity не рве з'єднання,
  * а foreground-сервіс (ComDexService) не дає системі вбити процес у фоні.
+ * Сервіс (і сповіщення в шторці) вмикається лише кнопкою «Під'єднатись» і вимикається «Від'єднатись».
  */
 @SuppressLint("StaticFieldLeak", "MissingPermission")
 object Core : GattClient.Listener {
@@ -72,11 +73,12 @@ object Core : GattClient.Listener {
         log("=== ControlDex v${Ui.VERSION} запущено ===")
     }
 
-    fun connect(d: BluetoothDevice) {
+    /** [background] — увімкнути роботу у фоні (foreground-сервіс зі сповіщенням); лише за явною дією користувача. */
+    fun connect(d: BluetoothDevice, background: Boolean) {
         Ui.prefs(app).edit().putString(Ui.KEY_LAST_MAC, d.address).apply()
         gatt.greenMode = Ui.greenMode(app)
-        log("connect ${d.name} ${d.address}")
-        ComDexService.start(app)
+        log("connect ${d.name} ${d.address}${if (background) " (у фоні)" else ""}")
+        if (background) ComDexService.start(app)
         gatt.connect(d)
     }
 
@@ -94,13 +96,23 @@ object Core : GattClient.Listener {
         return try { a.bondedDevices.firstOrNull { it.address == mac } } catch (_: Exception) { null }
     }
 
-    /** Автопідключення до останнього COM-DEX (запуск застосунку або перезапуск сервісу системою). */
+    /** Автопідключення до останнього COM-DEX під час запуску застосунку — без фонової роботи й сповіщення. */
     fun autoConnect(): Boolean {
         if (autoTried || gatt.wantConnected || !Ui.autoConnect(app)) return false
         autoTried = true
         val d = lastDevice() ?: return false
         log("Автопідключення до ${d.address}")
-        connect(d)
+        connect(d, background = false)
+        return true
+    }
+
+    /** Система перезапустила вбитий процес, коли працював сервіс: відновлюємо з'єднання з останнім COM-DEX. */
+    fun restoreBackground(): Boolean {
+        if (gatt.wantConnected) return true
+        autoTried = true
+        val d = lastDevice() ?: return false
+        log("Відновлення з'єднання у фоні з ${d.address}")
+        connect(d, background = false)
         return true
     }
 
