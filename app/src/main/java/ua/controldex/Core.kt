@@ -17,7 +17,7 @@ import java.util.UUID
  * Стан застосунку на весь час життя процесу: GATT-клієнт, останні значення COM-DEX і журнал.
  * Екран лише показує цей стан, тож закриття/перестворення Activity не рве з'єднання,
  * а foreground-сервіс (ComDexService) не дає системі вбити процес у фоні.
- * Сервіс (і сповіщення в шторці) вмикається лише кнопкою «Під'єднатись» і вимикається «Від'єднатись».
+ * Сервіс (і сповіщення в шторці) вмикається кнопкою «Під'єднатись» або автопідключенням і вимикається «Від'єднатись».
  */
 @SuppressLint("StaticFieldLeak", "MissingPermission")
 object Core : GattClient.Listener {
@@ -73,7 +73,7 @@ object Core : GattClient.Listener {
         log("=== ControlDex v${Ui.VERSION} запущено ===")
     }
 
-    /** [background] — увімкнути роботу у фоні (foreground-сервіс зі сповіщенням); лише за явною дією користувача. */
+    /** [background] — увімкнути роботу у фоні (foreground-сервіс зі сповіщенням); false — лише коли сервіс уже працює. */
     fun connect(d: BluetoothDevice, background: Boolean) {
         Ui.prefs(app).edit().putString(Ui.KEY_LAST_MAC, d.address).apply()
         gatt.greenMode = Ui.greenMode(app)
@@ -96,13 +96,13 @@ object Core : GattClient.Listener {
         return try { a.bondedDevices.firstOrNull { it.address == mac } } catch (_: Exception) { null }
     }
 
-    /** Автопідключення до останнього COM-DEX під час запуску застосунку — без фонової роботи й сповіщення. */
+    /** Автопідключення до останнього COM-DEX під час запуску застосунку — як «Під'єднатись», з роботою у фоні. */
     fun autoConnect(): Boolean {
         if (autoTried || gatt.wantConnected || !Ui.autoConnect(app)) return false
         autoTried = true
         val d = lastDevice() ?: return false
         log("Автопідключення до ${d.address}")
-        connect(d, background = false)
+        connect(d, background = true)
         return true
     }
 

@@ -23,7 +23,7 @@ Current version: **0.9** (`versionCode 9`), package `ua.controldex`, Android 8.0
 - **Boost COM-DEX media volume** (requires COM-DEX firmware ≥ 1.2.51).
 - **Hearing aid microphones** during streaming (call, music, Remote Mic): on / off.
 - **Status**: COM-DEX battery and charging, neck loop, current profile (Idle / call / music / Remote Mic), firmware, serial number.
-- **Background operation**: a foreground service with a status-bar notification, started by the «Під'єднатись» / Connect button and stopped by «Від'єднатись» / Disconnect (also available in the notification itself). Auto-connect to the last COM-DEX on launch (without background operation or notification) and automatic reconnection after the link is lost.
+- **Background operation**: a foreground service with a status-bar notification, started by the «Під'єднатись» / Connect button or by auto-connect to the last COM-DEX on launch, and stopped by «Від'єднатись» / Disconnect (also available in the notification itself). Also automatic reconnection after the link is lost.
 - **Green mode** (default): GATT over the existing Classic Bluetooth (BR/EDR) connection, like the original app's hidden mode for "problematic" phones. Eliminates audio stuttering when music starts on Redmi and similar phones.
 - **Themes**: light, dark, system.
 - **Built-in help** (texts taken from the original app) and an «Про програму» (About) screen.
@@ -68,7 +68,7 @@ and open questions is in the specification `../TZ_COM-DEX.md` (in Russian).
 | `ComDex.kt` | COM-DEX GATT profile: characteristic UUIDs and `PI_COMMAND` frames |
 | `GattClient.kt` | Connection (BLE and Green/BR/EDR), GATT operation queue, notifications, reconnection, watchdog |
 | `Core.kt` | Process-lifetime app state: GATT client, latest values, log, auto-connect |
-| `ComDexService.kt` | Foreground service (`connectedDevice`) with a notification; keeps the system from killing the process; runs from Connect to Disconnect |
+| `ComDexService.kt` | Foreground service (`connectedDevice`) with a notification; keeps the system from killing the process; runs from Connect (or auto-connect) to Disconnect |
 | `MainActivity.kt` | Main screen: connection, volume, programs, focus, Boost, microphones, status, debug panel |
 | `PageActivity.kt` | «Про програму» (About), «Налаштування» (Settings), «Довідка» (Help) screens |
 | `HelpTexts.kt` | Help texts |
